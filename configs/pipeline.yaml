@@ -1,0 +1,59 @@
+# 회의 요약 파이프라인 설정.
+# 매직넘버/모델명/임계값은 전부 여기로 모읍니다. 코드에 하드코딩 금지.
+
+audio:
+  # ffmpeg 변환 대상 샘플레이트(Hz). whisper.cpp 권장값 16kHz mono.
+  sample_rate: 16000
+  # ffmpeg subprocess 타임아웃(초).
+  timeout_sec: 300
+
+stt:
+  # whisper-cli 실행 파일. setup.sh 가 빌드하는 기본 경로(상대경로는 프로젝트 루트 기준).
+  # PATH에 등록했다면 "whisper-cli" 로 바꿔도 됨.
+  whisper_cli: "vendor/whisper.cpp/build/bin/whisper-cli"
+  # large-v3-turbo 모델(ggml) 경로. setup.sh 가 받아둔 위치(루트 기준 상대경로).
+  model_path: "vendor/whisper.cpp/models/ggml-large-v3-turbo.bin"
+  # 전사 언어(ISO 639-1). 한국어 회의 기준.
+  language: "ko"
+  # whisper-cli subprocess 타임아웃(초). 긴 회의 대비 넉넉하게.
+  timeout_sec: 3600
+  # 무음/환각 신뢰도 게이트.
+  confidence_gate:
+    # 세그먼트 no_speech_prob 가 이 값을 넘으면 무음으로 간주.
+    max_no_speech_prob: 0.6
+    # 세그먼트 평균 logprob 이 이 값보다 낮으면 환각 의심.
+    min_avg_logprob: -1.0
+    # 위 게이트를 통과(=유효 음성)한 세그먼트 비율이 이 값 미만이면 "유효 음성 없음" 판정.
+    min_valid_ratio: 0.2
+  # 전사 완전성 검사: 오디오 총 길이 - 마지막 세그먼트 end 가
+  # 이 허용오차(초)를 초과하면 잘린 전사로 보고 실패.
+  completeness_tolerance_sec: 5.0
+
+chunking:
+  # 청크 길이(분).
+  minutes: 15
+  # 청크 간 오버랩(초). 경계 액션아이템 누락 방지.
+  overlap_sec: 30
+  # 전사 전체 글자 수가 이 값 이하면 Map 생략하고 single-shot 요약.
+  # (토큰이 아니라 문자 수 기준. 한국어 ~1.5자/토큰 가정 시 12000자 ≈ 8천 토큰 안팎.)
+  single_shot_max_chars: 12000
+
+summarize:
+  # OpenRouter 폴백 체인. 위에서부터 순서대로 시도.
+  # 주의: 전부 :free 면 공용 쿼터라 상관 장애 위험(Ask First 대상).
+  models:
+    - "google/gemini-2.0-flash-exp:free"
+    - "deepseek/deepseek-chat-v3-0324:free"
+    - "meta-llama/llama-3.3-70b-instruct:free"
+  base_url: "https://openrouter.ai/api/v1"
+  # 모델당 429/타임아웃 재시도 횟수.
+  max_retries: 4
+  # 지수 백오프 기준(초). 대기 = backoff_base ** attempt.
+  backoff_base: 2
+  # 단일 LLM 요청 타임아웃(초).
+  request_timeout_sec: 120
+  # 생성 토큰 상한.
+  max_tokens: 2048
+  temperature: 0.3
+  # Map 단계 허용 누락률(%). 0 이면 청크 하나라도 실패 시 전체 실패.
+  max_chunk_failure_pct: 0
