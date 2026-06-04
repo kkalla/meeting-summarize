@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from src.cache import purge_expired
 from src.config import PipelineConfig, WatcherConfig
 from src.exceptions import PipelineError
 from src.pipeline import run_pipeline
@@ -82,6 +83,7 @@ class FolderWatcher:
 
     def _scan_once(self) -> None:
         """inbox 를 한 번 스캔해 안정화된 파일을 순차 처리한다."""
+        self._purge_cache()
         files = self._list_candidates()
         self._forget_vanished(files)
         for path in files:
@@ -93,6 +95,22 @@ class FolderWatcher:
             except OSError as exc:
                 # 스캔 도중 파일이 사라지거나 접근 불가 — 다음 파일로 넘어간다.
                 logger.warning("파일 접근 실패, 건너뜀: %s (%s)", path.name, exc)
+
+    def _purge_cache(self) -> None:
+        """TTL 만료된 전사 캐시를 정리한다. 어떤 실패도 스캔 루프를 죽이지 않는다.
+
+        캐시 정리는 부가 작업이므로, _scan_once 의 OSError 격리와 동일하게 예외를
+        삼키고 로그만 남긴다(데몬 생존 우선).
+        """
+        cache_cfg = self._config.cache
+        if not cache_cfg.enabled:
+            return
+        try:
+            removed = purge_expired(cache_cfg.transcripts_dir, cache_cfg.ttl_hours)
+            if removed:
+                logger.info("만료 전사 캐시 정리: %d개 삭제", removed)
+        except Exception as exc:  # noqa: BLE001 - 데몬 생존 우선: 정리 실패가 루프를 죽이면 안 됨
+            logger.warning("전사 캐시 정리 실패(무시): %s", exc)
 
     def _list_candidates(self) -> list[Path]:
         """inbox 안의 대상 확장자 파일을 이름순으로 반환한다."""
