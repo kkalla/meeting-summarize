@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# 외부 바이너리 / 모델 (setup.sh가 생성)
+vendor/
+
+# 산출물 / 임시 작업물
+out/
+*.wav
+*.json.tmp
+
+# BMAD 프레임워크 스캐폴딩 (도구 설치물 — 프로젝트 코드 아님)
+_bmad/
+.claude/
+.agents/

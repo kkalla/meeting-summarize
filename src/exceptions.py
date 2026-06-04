@@ -1,0 +1,23 @@
+"""파이프라인 전역에서 쓰는 custom 예외 계층.
+
+모든 예외는 :class:`PipelineError` 를 상속한다. CLI 진입점은 이 베이스만
+잡아서 사용자 친화적 메시지를 출력할 수 있다.
+"""
+
+from __future__ import annotations
+
+
+class PipelineError(Exception):
+    """파이프라인에서 발생하는 모든 도메인 예외의 베이스."""
+
+
+class DependencyError(PipelineError):
+    """외부 바이너리(ffmpeg/whisper-cli) 미설치 또는 모델/키 누락."""
+
+
+class TranscriptionError(PipelineError):
+    """전사 실패: whisper-cli 비정상 종료, JSON 파싱 실패, 잘린/불완전 전사 등."""
+
+
+class SummarizationError(PipelineError):
+    """요약 실패: OpenRouter 호출이 재시도·폴백을 모두 소진했거나 허용 누락률 초과."""
