@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.config import WatcherConfig, _build_watcher_config
+from src.config import CacheConfig, WatcherConfig, _build_watcher_config
 from src.exceptions import DependencyError, PipelineError
 from src.watcher import FolderWatcher
 
@@ -31,9 +31,13 @@ def _wcfg(tmp_path: Path, stability_checks: int = 2) -> WatcherConfig:
     )
 
 
+def _ccfg(tmp_path: Path, enabled: bool = False) -> CacheConfig:
+    return CacheConfig(transcripts_dir=tmp_path / "transcripts", ttl_hours=168, enabled=enabled)
+
+
 @pytest.fixture
 def watcher(tmp_path: Path) -> FolderWatcher:
-    config = SimpleNamespace(watcher=_wcfg(tmp_path))
+    config = SimpleNamespace(watcher=_wcfg(tmp_path), cache=_ccfg(tmp_path))
     instance = FolderWatcher(config, "configs/pipeline.yaml")
     instance._ensure_dirs()
     return instance
@@ -297,3 +301,53 @@ def test_watcher_config_post_init_validates_on_direct_construction(tmp_path):
             stability_checks=2,
             extensions=(".m4a",),
         )
+
+
+def _make_watcher(tmp_path: Path, *, cache_enabled: bool) -> FolderWatcher:
+    config = SimpleNamespace(watcher=_wcfg(tmp_path), cache=_ccfg(tmp_path, enabled=cache_enabled))
+    instance = FolderWatcher(config, "configs/pipeline.yaml")
+    instance._ensure_dirs()
+    return instance
+
+
+def test_scan_once_purges_cache(tmp_path, monkeypatch):
+    watcher = _make_watcher(tmp_path, cache_enabled=True)
+    calls = {"n": 0}
+    monkeypatch.setattr("src.watcher.purge_expired", lambda d, ttl: calls.__setitem__("n", calls["n"] + 1) or 0)
+    monkeypatch.setattr(watcher, "_list_candidates", lambda: [])
+    watcher._scan_once()
+    assert calls["n"] == 1
+
+
+def test_purge_cache_swallows_errors(tmp_path, monkeypatch):
+    watcher = _make_watcher(tmp_path, cache_enabled=True)
+
+    def _boom(d, ttl):
+        raise OSError("디스크 오류")
+
+    monkeypatch.setattr("src.watcher.purge_expired", _boom)
+    # 예외가 새지 않아야 한다(데몬 생존 우선).
+    watcher._purge_cache()
+
+
+def test_purge_cache_skipped_when_disabled(tmp_path, monkeypatch):
+    watcher = _make_watcher(tmp_path, cache_enabled=False)
+
+    def _fail(d, ttl):
+        raise AssertionError("disabled 인데 purge_expired 호출됨")
+
+    monkeypatch.setattr("src.watcher.purge_expired", _fail)
+    watcher._purge_cache()
+
+
+def test_purge_cache_throttled_within_interval(tmp_path, monkeypatch):
+    # TTL 이 시간 단위라 정리는 인터벌마다 한 번만 — 스캔(초 단위)마다 돌면 안 된다.
+    watcher = _make_watcher(tmp_path, cache_enabled=True)
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        "src.watcher.purge_expired",
+        lambda d, ttl: calls.__setitem__("n", calls["n"] + 1) or 0,
+    )
+    watcher._purge_cache()  # 첫 호출 — 정리한다
+    watcher._purge_cache()  # 인터벌 내 재호출 — 스킵한다
+    assert calls["n"] == 1

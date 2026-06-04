@@ -10,10 +10,11 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from src import cache
 from src.audio import convert_to_wav
 from src.chunking import Chunk, chunk_segments
 from src.config import PROJECT_ROOT, PipelineConfig, load_config
-from src.exceptions import DependencyError
+from src.exceptions import CacheError, DependencyError
 from src.report import ReportMeta, render_report
 from src.summarize import summarize_meeting
 from src.transcribe import Segment, transcribe
@@ -57,7 +58,7 @@ def run_pipeline(
         convert_to_wav(input_path, wav_path, config.audio)
 
         logger.info("전사 시작")
-        segments = transcribe(wav_path, config.stt)
+        segments = _transcribe_or_load(input_path, wav_path, config)
 
     logger.info("전사 완료: 세그먼트 %d개", len(segments))
     chunks = chunk_segments(segments, config.chunking)
@@ -77,6 +78,31 @@ def run_pipeline(
     output_path.write_text(report, encoding="utf-8")
     logger.info("리포트 생성 완료: %s", output_path)
     return output_path
+
+
+def _transcribe_or_load(input_path: Path, wav_path: Path, config: PipelineConfig) -> list[Segment]:
+    """전사 캐시를 우선 조회하고, 없으면 전사 후 저장한다.
+
+    캐시가 비활성이거나 키 계산이 실패하면 캐시 없이 전사로 폴백한다(캐시는 정확성에
+    영향 없는 최적화 — 어떤 캐시 실패도 전사 자체를 막지 않는다).
+    """
+    cache_cfg = config.cache
+    if not cache_cfg.enabled:
+        return transcribe(wav_path, config.stt)
+    try:
+        key = cache.compute_key(input_path, config.stt)
+    except CacheError as exc:
+        logger.warning("캐시 키 계산 실패 — 캐시 없이 전사: %s", exc)
+        return transcribe(wav_path, config.stt)
+
+    cached = cache.load(cache_cfg.transcripts_dir, key)
+    if cached is not None:
+        logger.info("전사 캐시 HIT — 전사 스킵 (세그먼트 %d개)", len(cached))
+        return cached
+
+    segments = transcribe(wav_path, config.stt)
+    cache.store(cache_cfg.transcripts_dir, key, segments, source_name=input_path.name)
+    return segments
 
 
 def _build_meta(

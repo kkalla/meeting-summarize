@@ -17,6 +17,8 @@ from src.exceptions import DependencyError
 
 ENV_API_KEY = "OPENROUTER_API_KEY"
 DEFAULT_CONFIG_PATH = "configs/pipeline.yaml"
+DEFAULT_TRANSCRIPTS_DIR = "data/transcripts"
+DEFAULT_CACHE_TTL_HOURS = 168.0
 
 # 프로젝트 루트(src/ 의 부모). 상대경로 리소스를 CWD 가 아닌 루트 기준으로 푼다.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +172,21 @@ class WatcherConfig:
 
 
 @dataclass(frozen=True)
+class CacheConfig:
+    """전사 결과 캐시 설정."""
+
+    transcripts_dir: Path
+    ttl_hours: float
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        # disabled 면 ttl 은 사용되지 않으므로 검증하지 않는다. enabled 일 때 ttl<=0 이면
+        # 모든 캐시가 즉시 만료되어 캐시가 무력화되므로 로딩 시점에 막는다.
+        if self.enabled and self.ttl_hours <= 0:
+            raise DependencyError(f"cache.ttl_hours 는 양수여야 합니다: {self.ttl_hours}")
+
+
+@dataclass(frozen=True)
 class PipelineConfig:
     """파이프라인 전체 설정 + 런타임 시크릿(API 키)."""
 
@@ -178,6 +195,7 @@ class PipelineConfig:
     chunking: ChunkingConfig
     summarize: SummarizeConfig
     watcher: WatcherConfig
+    cache: CacheConfig
     api_key: str
 
 
@@ -268,6 +286,7 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
                 max_chunk_failure_pct=float(sum_raw["max_chunk_failure_pct"]),
             ),
             watcher=_build_watcher_config(watch_raw),
+            cache=_build_cache_config(raw.get("cache")),
             api_key=api_key,
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -275,6 +294,25 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
             f"pipeline.yaml 설정이 올바르지 않습니다({type(exc).__name__}: {exc}). "
             "configs/pipeline.yaml 의 필수 키와 값 타입을 확인하세요."
         ) from exc
+
+
+def _build_cache_config(cache_raw: dict | None) -> CacheConfig:
+    """cache 설정 dict 를 :class:`CacheConfig` 로 변환한다.
+
+    섹션이 없으면 비활성(enabled=False) 기본값으로 둬, cache 섹션이 없는 기존 설정
+    파일도 캐시 없이(현행 동작) 그대로 동작하게 한다.
+    """
+    if cache_raw is None:
+        return CacheConfig(
+            transcripts_dir=_resolve_dir(DEFAULT_TRANSCRIPTS_DIR),
+            ttl_hours=DEFAULT_CACHE_TTL_HOURS,
+            enabled=False,
+        )
+    return CacheConfig(
+        transcripts_dir=_resolve_dir(str(cache_raw["transcripts_dir"])),
+        ttl_hours=float(cache_raw["ttl_hours"]),
+        enabled=bool(cache_raw["enabled"]),
+    )
 
 
 def _build_watcher_config(watch_raw: dict) -> WatcherConfig:

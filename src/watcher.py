@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from src.cache import purge_expired
 from src.config import PipelineConfig, WatcherConfig
 from src.exceptions import PipelineError
 from src.pipeline import run_pipeline
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 REPORT_SUFFIX = ".md"
 # stop 신호에 빠르게 반응하도록 sleep 을 이 간격(초)으로 잘게 나눈다.
 SLEEP_SLICE_SEC = 1
+# 캐시 정리 최소 간격(초). TTL 은 시간 단위라 스캔마다(초 단위) 디렉토리를 훑을
+# 필요가 없다 — 한 시간에 한 번만 정리해 폴링당 glob+stat I/O 를 줄인다.
+CACHE_PURGE_INTERVAL_SEC = 3600
 
 
 class FolderWatcher:
@@ -46,6 +50,8 @@ class FolderWatcher:
         self._stable_counts: dict[Path, int] = {}
         # 이동이 영구 실패(읽기전용/권한/디스크풀)해 inbox 에 남은 파일. 재처리를 막는다.
         self._quarantined: set[Path] = set()
+        # 마지막 캐시 정리 시각(monotonic). 0 이면 첫 스캔에서 즉시 한 번 정리한다.
+        self._last_purge_monotonic: float = 0.0
         self._stop = False
 
     def request_stop(self) -> None:
@@ -82,6 +88,7 @@ class FolderWatcher:
 
     def _scan_once(self) -> None:
         """inbox 를 한 번 스캔해 안정화된 파일을 순차 처리한다."""
+        self._purge_cache()
         files = self._list_candidates()
         self._forget_vanished(files)
         for path in files:
@@ -93,6 +100,29 @@ class FolderWatcher:
             except OSError as exc:
                 # 스캔 도중 파일이 사라지거나 접근 불가 — 다음 파일로 넘어간다.
                 logger.warning("파일 접근 실패, 건너뜀: %s (%s)", path.name, exc)
+
+    def _purge_cache(self) -> None:
+        """TTL 만료된 전사 캐시를 정리한다. 어떤 실패도 스캔 루프를 죽이지 않는다.
+
+        TTL 이 시간 단위라 정리는 ``CACHE_PURGE_INTERVAL_SEC`` 마다 한 번이면 충분하다
+        — 스캔(초 단위)마다 디렉토리를 훑지 않는다. 캐시 정리는 부가 작업이므로,
+        _scan_once 의 OSError 격리와 동일하게 예외를 삼키고 로그만 남긴다(데몬 생존 우선).
+        """
+        cache_cfg = self._config.cache
+        if not cache_cfg.enabled:
+            return
+        now = time.monotonic()
+        if now - self._last_purge_monotonic < CACHE_PURGE_INTERVAL_SEC:
+            return
+        self._last_purge_monotonic = now
+        try:
+            removed = purge_expired(cache_cfg.transcripts_dir, cache_cfg.ttl_hours)
+            if removed:
+                logger.info("만료 전사 캐시 정리: %d개 삭제", removed)
+        except Exception:  # noqa: BLE001 - 데몬 생존 우선: 정리 실패가 루프를 죽이면 안 됨
+            # logger.exception 으로 traceback 을 남긴다. purge_expired 는 OSError 만
+            # 던지도록 설계됐으므로, 그 외 예외가 잡히면 정리 로직 버그 신호다.
+            logger.exception("전사 캐시 정리 실패(무시)")
 
     def _list_candidates(self) -> list[Path]:
         """inbox 안의 대상 확장자 파일을 이름순으로 반환한다."""
