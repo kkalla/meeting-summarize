@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         logging.getLogger(__name__).error("실패: %s", exc)
         return 1
 
-    print(f"요약 리포트 생성 완료: {output}")
+    logging.getLogger(__name__).info("요약 리포트 생성 완료: %s", output)
     return 0
 
 

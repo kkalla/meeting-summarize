@@ -48,7 +48,7 @@ def parse_segments(data: dict) -> list[Segment]:
     """whisper-cli JSON dict 를 :class:`Segment` 리스트로 변환한다.
 
     Args:
-        data: ``-oj`` 로 생성된 JSON 을 파싱한 dict.
+        data: ``-oj -ojf`` 로 생성된 full JSON(세그먼트별 ``tokens[].p`` 포함)을 파싱한 dict.
 
     Returns:
         세그먼트 리스트(빈 전사면 빈 리스트).
