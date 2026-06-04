@@ -11,9 +11,8 @@ from pathlib import Path
 
 import pytest
 
-# --- CacheConfig ----------------------------------------------------------
 from src.config import (
-    CacheConfig,  # noqa: E402  (테스트 가독성 위해 지역 import)
+    CacheConfig,
     ChunkingConfig,
     ConfidenceGate,
     SttConfig,
@@ -21,6 +20,8 @@ from src.config import (
     _build_config,
 )
 from src.exceptions import DependencyError
+
+# --- CacheConfig ----------------------------------------------------------
 
 
 def test_cache_config_rejects_non_positive_ttl_when_enabled():

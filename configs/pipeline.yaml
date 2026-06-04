@@ -63,6 +63,15 @@ summarize:
   # Map 단계 허용 누락률(%). 0 이면 청크 하나라도 실패 시 전체 실패.
   max_chunk_failure_pct: 0
 
+cache:
+  # 전사 결과 캐시. 전사 성공분을 원본 오디오 SHA-256 키로 보관해, 요약 등 후속
+  # 단계 실패 후 재처리 시 전사(가장 비싼 단계)를 건너뛴다. (issue #5)
+  # 디렉토리는 컨테이너 기준 절대경로가 기본(compose 에서 호스트 폴더를 마운트).
+  transcripts_dir: "/data/transcripts"
+  # 이 시간이 지난 캐시는 watcher 스캔 시 삭제. 168h = 7일.
+  ttl_hours: 168
+  enabled: true
+
 watcher:
   # 폴더 watcher 데몬 설정. podman 컨테이너 안에서 동작.
   # 디렉토리는 컨테이너 기준 절대경로가 기본(compose 에서 호스트 폴더를 마운트).
