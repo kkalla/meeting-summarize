@@ -197,9 +197,10 @@ def test_map_partial_failure_within_threshold_marks_missing_and_proceeds():
     assert result == "부분요약"
 
 
-def test_truncated_length_finish_reason_falls_back_to_next_model():
+def test_truncated_length_finish_reason_skips_retry_and_falls_back():
     # reasoning 모델이 사고과정에서 max_tokens 를 소진해 본문이 잘린 경우(finish_reason="length").
     # 잘린 사고과정을 요약으로 저장하면 안 되므로 실패로 보고 다음 모델로 폴백해야 한다.
+    # 같은 예산이면 또 잘리는 결정적 실패라 재시도 없이 단 한 번만 호출하고 폴백한다.
     def handler(kwargs):
         if kwargs["model"] == "m1":
             return ("We need to produce final summary in Korean...", "length")
@@ -207,10 +208,12 @@ def test_truncated_length_finish_reason_falls_back_to_next_model():
 
     client = FakeClient(handler)
 
-    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2"), "max_retries": 1})
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2"), "max_retries": 3})
 
     assert "핵심 요약" in result
     assert [c["model"] for c in client.calls][-1] == "m2"  # 잘린 m1 버리고 m2 로 폴백
+    # 재시도 스킵: m1 은 결정적 잘림이라 max_retries(3) 만큼 재시도하지 않고 단 한 번만 호출.
+    assert len([c for c in client.calls if c["model"] == "m1"]) == 1
 
 
 def test_reasoning_exclude_passed_in_extra_body():
@@ -266,15 +269,16 @@ def test_unclosed_think_with_trailing_body_drops_body_and_falls_back():
     assert [c["model"] for c in client.calls][-1] == "m2"
 
 
-def test_nested_think_does_not_leak_orphan_close_tag():
-    # 중첩 <think> 는 비탐욕 매칭이 안쪽 </think> 에서 멈춰 바깥 </think> 가 고아로 남는다.
-    # 고아 닫는 태그가 요약에 새어나가면 안 된다.
+def test_nested_think_does_not_leak_residual_reasoning_or_orphan_close():
+    # 중첩 <think> 는 비탐욕 매칭이 안쪽 </think> 에서 멈춰, 바깥 </think> 와 그 앞의 잔여
+    # 사고과정("잔여사고")이 고아로 남는다. 고아 닫는 태그뿐 아니라 잔여 사고과정도 새면 안 된다.
     client = FakeClient(lambda _: "<think>외부<think>내부</think>잔여사고</think>\n## 핵심 요약\n- ok")
 
     result = _summarize([_chunk(0, "회의")], client)
 
     assert "</think>" not in result
-    assert result.endswith("## 핵심 요약\n- ok") or "## 핵심 요약" in result
+    assert "잔여사고" not in result  # 고아 </think> 앞의 잔여 사고과정도 제거됨
+    assert result == "## 핵심 요약\n- ok"
 
 
 def test_think_only_content_skips_retry_and_falls_back():
@@ -303,6 +307,22 @@ def test_think_only_on_all_models_raises_reasoning_leak_error():
 
     # 단일 모델·결정적 누출 → 재시도 없이 단 한 번만 호출.
     assert len(client.calls) == 1
+
+
+def test_blank_content_without_think_retries_then_falls_back():
+    # <think> 없이 공백만 온 응답은 reasoning 누출이 아니라 일시적 빈 응답일 수 있다.
+    # ReasoningLeakError(재시도 스킵)로 오분류하지 않고 일반 오류로 던져 재시도 경로를 태운다.
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            return "   "  # <think> 없는 공백 응답
+        return "## 핵심 요약\n- ok"
+
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2"), "max_retries": 2})
+
+    assert result == "## 핵심 요약\n- ok"
+    # 누출이 아니므로 재시도 스킵하지 않음 → m1 을 max_retries(2) 만큼 호출한 뒤 폴백.
+    assert len([c for c in client.calls if c["model"] == "m1"]) == 2
 
 
 def test_content_none_is_distinguished_and_falls_back_to_next_model():

@@ -29,3 +29,11 @@ class ReasoningLeakError(SummarizationError):
     provider 가 ``reasoning.exclude`` 를 무시해 content 에 사고과정만 남긴 상황으로,
     같은 모델로 재시도해도 결정적으로 동일하다. 재시도를 건너뛰고 다음 모델로 폴백한다.
     """
+
+
+class TruncatedResponseError(SummarizationError):
+    """응답이 ``max_tokens`` 에서 잘린 경우(``finish_reason="length"``).
+
+    reasoning 모델이 사고과정에서 토큰을 소진해 본문을 못 낸 상황으로, 같은 모델·같은
+    예산으로 재시도해도 결정적으로 동일하게 잘린다. 재시도를 건너뛰고 다음 모델로 폴백한다.
+    """
