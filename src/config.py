@@ -19,6 +19,10 @@ ENV_API_KEY = "OPENROUTER_API_KEY"
 DEFAULT_CONFIG_PATH = "configs/pipeline.yaml"
 DEFAULT_TRANSCRIPTS_DIR = "data/transcripts"
 DEFAULT_CACHE_TTL_HOURS = 168.0
+# whisper 초기 프롬프트 길이 상한(문자). whisper.cpp 는 n_text_ctx/2 토큰까지만 쓰고
+# 나머지는 잘라내므로 초장문은 무의미하고, argv 비대화(E2BIG)·환각 누출 위험만 키운다.
+# 한국어 용어집은 수백 자면 충분하다는 판단의 넉넉한 sanity 상한.
+MAX_STT_PROMPT_CHARS = 2000
 
 # 프로젝트 루트(src/ 의 부모). 상대경로 리소스를 CWD 가 아닌 루트 기준으로 푼다.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +95,8 @@ class SttConfig:
     # whisper 초기 프롬프트(initial prompt). 도메인 용어·고유명사를 미리 주입해 한국어
     # 전문용어 오인식(예: "비식별화"→"비식별아")을 줄인다. 비우면 --prompt 를 넘기지 않는다.
     # 전사 출력을 좌우하므로 캐시 키(_stt_fingerprint)에도 반영된다.
+    # 정규화(strip)·검증은 __post_init__ 이 소유한다 — 로딩 경로뿐 아니라 직접 생성(테스트·
+    # 미래 호출자)에서도 동일한 불변식(공백 제거·문자열 타입·길이 상한)이 보장되도록.
     prompt: str = ""
 
     def __post_init__(self) -> None:
@@ -98,6 +104,21 @@ class SttConfig:
         # 전사를 막지는 않되, 명백히 잘못된 설정은 로딩 시점에 거른다.
         if self.rtf_estimate <= 0.0:
             raise DependencyError(f"stt.rtf_estimate 는 양수여야 합니다: {self.rtf_estimate}")
+        # prompt 불변식을 타입이 소유한다(로딩 경로 전용이 아니라). 비문자열 YAML
+        # (prompt: true/null/리스트)은 str() 로 조용히 "True"/"None" 이 되어 whisper 에
+        # 깨진 용어집을 주입하므로, 변환 대신 명시적으로 거부한다.
+        if not isinstance(self.prompt, str):
+            raise DependencyError(f"stt.prompt 는 문자열이어야 합니다: {type(self.prompt).__name__}")
+        stripped = self.prompt.strip()
+        # 앞뒤 공백을 제거한 값으로 고정한다(frozen 이라 object.__setattr__). 공백차만 다른
+        # 의미상 같은 프롬프트가 서로 다른 캐시 지문/--prompt 값을 내지 않게 한다.
+        if stripped != self.prompt:
+            object.__setattr__(self, "prompt", stripped)
+        if len(stripped) > MAX_STT_PROMPT_CHARS:
+            raise DependencyError(
+                f"stt.prompt 가 너무 깁니다({len(stripped)}자 > {MAX_STT_PROMPT_CHARS}자). "
+                "핵심 도메인 용어 위주로 간결하게 유지하세요(초과분은 whisper 가 잘라냅니다)."
+            )
 
 
 @dataclass(frozen=True)
@@ -274,7 +295,9 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
                 completeness_tolerance_sec=float(stt_raw["completeness_tolerance_sec"]),
                 rtf_estimate=float(stt_raw["rtf_estimate"]),
                 # prompt 는 신규·선택 필드라 .get 으로 읽어 기존 설정 파일도 그대로 동작하게 한다.
-                prompt=str(stt_raw.get("prompt", "")).strip(),
+                # 정규화(strip)·타입/길이 검증은 SttConfig.__post_init__ 이 소유하므로, 여기선
+                # raw 값을 그대로 넘긴다(비문자열 YAML 도 str() 로 덮지 않고 검증이 잡게).
+                prompt=stt_raw.get("prompt", ""),
             ),
             chunking=ChunkingConfig(
                 minutes=int(chunk_raw["minutes"]),

@@ -63,6 +63,23 @@ def test_build_config_stt_prompt_defaults_empty_when_missing():
     assert cfg.stt.prompt == ""
 
 
+@pytest.mark.parametrize("bad_prompt", [True, None, ["용어"], 123])
+def test_build_config_rejects_non_string_prompt(bad_prompt):
+    # 비문자열 YAML(prompt: true/null/리스트)을 str() 로 조용히 "True"/"None" 으로 덮지 않고
+    # 명시적으로 거부해야 한다(깨진 용어집이 whisper 에 주입되는 것 방지).
+    raw = _raw()
+    raw["stt"]["prompt"] = bad_prompt
+    with pytest.raises(DependencyError):
+        _build_config(raw, api_key="k")
+
+
+def test_build_config_rejects_overlong_prompt():
+    raw = _raw()
+    raw["stt"]["prompt"] = "가" * 2001  # MAX_STT_PROMPT_CHARS(2000) 초과
+    with pytest.raises(DependencyError):
+        _build_config(raw, api_key="k")
+
+
 def _raw() -> dict:
     """검증을 통과하는 최소 정상 YAML dict."""
     return {
@@ -143,6 +160,18 @@ def _stt(**overrides):
 def test_stt_config_rejects_non_positive_rtf_estimate(rtf):
     with pytest.raises(DependencyError):
         SttConfig(**_stt(rtf_estimate=rtf))
+
+
+def test_stt_config_strips_prompt_on_direct_construction():
+    # 불변식이 로딩 경로가 아니라 타입(__post_init__)에 있으므로, SttConfig 를 직접
+    # 생성해도 앞뒤 공백이 제거된다(공백차만 다른 프롬프트가 다른 캐시 지문을 내지 않게).
+    cfg = SttConfig(**_stt(prompt="  비식별화  "))
+    assert cfg.prompt == "비식별화"
+
+
+def test_stt_config_rejects_non_string_prompt_on_direct_construction():
+    with pytest.raises(DependencyError):
+        SttConfig(**_stt(prompt=True))
 
 
 # --- ChunkingConfig -------------------------------------------------------

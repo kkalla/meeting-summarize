@@ -18,16 +18,12 @@ from src.exceptions import CacheError
 from src.transcribe import Segment
 
 
-def _stt(model_path: str = "ggml-large-v3-turbo.bin", language: str = "ko", prompt=None):
+def _stt(model_path: str = "ggml-large-v3-turbo.bin", language: str = "ko", prompt: str = ""):
     """compute_key 가 보는 최소 STT 설정 더블 (model_path/language/prompt 를 읽는다).
 
-    prompt=None 이면 필드 자체를 두지 않아, 옛 설정(필드 없음)에 대한 getattr 기본값
-    경로까지 검증할 수 있게 한다.
+    prompt 는 실제 SttConfig 와 동일하게 항상 존재한다(_stt_fingerprint 가 직접 접근).
     """
-    ns = SimpleNamespace(model_path=model_path, language=language)
-    if prompt is not None:
-        ns.prompt = prompt
-    return ns
+    return SimpleNamespace(model_path=model_path, language=language, prompt=prompt)
 
 
 def test_compute_key_same_content_same_key(tmp_path):
@@ -66,13 +62,6 @@ def test_compute_key_different_prompt_different_key(tmp_path):
     a = tmp_path / "a.bin"
     a.write_bytes(b"hello world" * 1000)
     assert cache.compute_key(a, _stt(prompt="용어집 A")) != cache.compute_key(a, _stt(prompt="용어집 B"))
-
-
-def test_compute_key_missing_prompt_field_treated_as_empty(tmp_path):
-    # 옛 더블(prompt 필드 없음)은 getattr 기본값("")로 처리돼 빈 프롬프트와 같은 키를 낸다.
-    a = tmp_path / "a.bin"
-    a.write_bytes(b"hello world" * 1000)
-    assert cache.compute_key(a, _stt()) == cache.compute_key(a, _stt(prompt=""))
 
 
 def test_compute_key_missing_file_raises(tmp_path):
