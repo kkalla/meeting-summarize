@@ -250,6 +250,33 @@ def test_unclosed_think_block_does_not_leak_to_summary():
     assert [c["model"] for c in client.calls][-1] == "m2"  # 누출난 m1 버리고 m2 로 폴백
 
 
+def test_unclosed_think_with_trailing_body_drops_body_and_falls_back():
+    # 의도된 트레이드오프 명세: <think> 가 닫히지 않은 채 뒤에 본문이 이어지면, 사고/본문 경계
+    # 신호가 없으므로 본문도 함께 제거된다 → 빈 결과 → 누출로 보고 다음 모델로 폴백.
+    # (복구 불가능한 누출을 조용히 새게 두느니 시끄럽게 폴백시키는 게 낫다.)
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            return "<think>닫는 태그 없는 사고과정\n## 핵심 요약\n- 버려질 본문"
+        return "## 핵심 요약\n- ok"
+
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2")})
+
+    assert result == "## 핵심 요약\n- ok"  # m1 의 본문은 살리지 않고 m2 로 폴백
+    assert [c["model"] for c in client.calls][-1] == "m2"
+
+
+def test_nested_think_does_not_leak_orphan_close_tag():
+    # 중첩 <think> 는 비탐욕 매칭이 안쪽 </think> 에서 멈춰 바깥 </think> 가 고아로 남는다.
+    # 고아 닫는 태그가 요약에 새어나가면 안 된다.
+    client = FakeClient(lambda _: "<think>외부<think>내부</think>잔여사고</think>\n## 핵심 요약\n- ok")
+
+    result = _summarize([_chunk(0, "회의")], client)
+
+    assert "</think>" not in result
+    assert result.endswith("## 핵심 요약\n- ok") or "## 핵심 요약" in result
+
+
 def test_think_only_content_skips_retry_and_falls_back():
     # provider 가 exclude 를 무시하고 본문 없이 <think>...</think> 만 보낸 경우.
     # 빈 응답으로 뭉개지 않고 ReasoningLeakError 로 분류 → 결정적이라 재시도 없이 바로 다음 모델로.

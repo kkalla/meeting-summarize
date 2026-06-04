@@ -46,6 +46,8 @@ chunking:
 summarize:
   # OpenRouter 폴백 체인. 위에서부터 순서대로 시도.
   # 주의: 전부 :free 면 공용 쿼터라 상관 장애 위험(Ask First 대상).
+  # 주의: 모든 모델에 reasoning 힌트(extra_body)가 전달된다. 비-reasoning 모델을 추가할 때
+  #       해당 provider 가 unknown 파라미터를 거부(400)하면 멀쩡한 모델이 스킵될 수 있다.
   models:
     - "nvidia/nemotron-3-super-120b-a12b:free"
     - "google/gemma-4-31b-it:free"

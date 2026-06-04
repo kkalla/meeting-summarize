@@ -33,17 +33,25 @@ _FINISH_REASON_LENGTH = "length"
 
 # 일부 reasoning 모델은 OpenRouter reasoning.exclude 를 무시하고 content 에 사고과정을
 # <think>...</think> 로 인라인으로 남긴다. 본문에서 방어적으로 제거한다.
-# 닫는 태그 없이 <think>... 로 끝나는(finish_reason="stop") 누출 변종까지 잡도록
-# 닫는 태그를 선택적으로(`</think>|$`) 둔다 — 안 그러면 raw 사고과정이 요약으로 새어나간다.
+# 닫는 태그가 없으면(`</think>|$`) <think> 이후 문자열 끝까지 제거한다 — 사고과정이 어디서
+# 끝나는지 신호가 없으므로 뒤따르는 텍스트도 사고과정으로 간주한다. 따라서 모델이 <think> 를
+# 닫지 않은 채 본문을 이어붙이면 그 본문도 함께 사라진다(→ 빈 결과 → ReasoningLeakError 폴백).
+# 이는 의도된 트레이드오프다: 복구 불가능한 누출을 조용히 새게 두느니 시끄럽게 폴백시킨다.
 _THINK_BLOCK = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL | re.IGNORECASE)
+# 중첩 <think> 는 비탐욕 매칭이 안쪽 </think> 에서 멈춰 바깥 </think> 가 고아로 남는다.
+# 출력에 새는 닫는 태그는 항상 오류이므로 별도로 제거한다.
+_ORPHAN_THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
 
 
 def _strip_reasoning(text: str) -> str:
     """content 에 인라인으로 남은 ``<think>...</think>`` 블록을 제거한다.
 
-    닫는 태그가 없는 누출(모델이 사고과정만 내고 종료)도 문자열 끝까지 제거한다.
+    닫는 태그가 없는 누출(<think> 가 열린 뒤 닫히지 않음)은 사고과정 뒤에 본문이
+    이어지더라도 문자열 끝까지 전부 제거한다 — 사고/본문 경계 신호가 없기 때문이다.
+    중첩으로 남은 고아 ``</think>`` 태그도 함께 제거한다.
     """
-    return _THINK_BLOCK.sub("", text).strip()
+    without_blocks = _THINK_BLOCK.sub("", text)
+    return _ORPHAN_THINK_CLOSE.sub("", without_blocks).strip()
 
 
 # 키/권한 문제 — 어떤 모델로 바꿔도 동일하게 실패하므로 즉시 중단한다.
@@ -162,10 +170,9 @@ def _complete_with_fallback(
     for model in config.models:
         for attempt in range(config.max_retries):
             try:
-                content = _chat_once(prompt, model=model, config=config, client=client)
-                if not content.strip():
-                    raise SummarizationError(f"{model} 이 빈 응답을 반환했습니다.")
-                return content.strip()
+                # _chat_once 는 항상 non-empty 로 strip 된 본문을 반환한다(빈 응답/None/누출은
+                # 내부에서 예외로 변환). 따라서 여기서 빈 응답을 다시 검사할 필요가 없다.
+                return _chat_once(prompt, model=model, config=config, client=client)
             except _FATAL_ERRORS as exc:
                 raise SummarizationError(f"인증/권한 오류로 요약을 중단합니다(키를 확인하세요): {exc}") from exc
             except ReasoningLeakError as exc:
@@ -196,11 +203,15 @@ def _complete_with_fallback(
 
     raise SummarizationError(
         f"모든 요약 모델 호출에 실패했습니다(시도 모델: {list(config.models)}). 마지막 오류: {last_error}"
-    )
+    ) from last_error
 
 
 def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: OpenAI) -> str:
-    """단일 chat completion 호출. 응답 본문 문자열을 반환한다."""
+    """단일 chat completion 호출. 항상 non-empty 로 strip 된 본문을 반환한다.
+
+    빈 응답·content=None·잘림(finish_reason=length)·사고과정만 누출된 경우는 모두
+    반환 대신 예외(SummarizationError/ReasoningLeakError)로 변환된다.
+    """
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
