@@ -6,6 +6,8 @@ Segment 필드(None 포함)를 보존하며, 손상/버전불일치 캐시는 �
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src import cache
@@ -62,3 +64,21 @@ def test_store_no_tmp_leftover(tmp_path):
 
 def test_load_missing_key_returns_none(tmp_path):
     assert cache.load(tmp_path, "missing") is None
+
+
+def test_load_corrupt_json_returns_none(tmp_path):
+    (tmp_path / "k.json").write_text("{not valid json", encoding="utf-8")
+    assert cache.load(tmp_path, "k") is None
+
+
+def test_load_version_mismatch_returns_none(tmp_path):
+    payload = {"version": 999, "created_at": "x", "segments": []}
+    (tmp_path / "k.json").write_text(json.dumps(payload), encoding="utf-8")
+    assert cache.load(tmp_path, "k") is None
+
+
+def test_load_broken_schema_returns_none(tmp_path):
+    # segments 항목에 Segment 가 모르는 필드 → TypeError → None
+    payload = {"version": cache.CACHE_VERSION, "segments": [{"bogus": 1}]}
+    (tmp_path / "k.json").write_text(json.dumps(payload), encoding="utf-8")
+    assert cache.load(tmp_path, "k") is None
