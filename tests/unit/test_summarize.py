@@ -27,7 +27,9 @@ NO_SLEEP = lambda _: None  # noqa: E731 - 테스트용 no-op 백오프
 class FakeClient:
     """client.chat.completions.create 를 흉내내는 테스트 더블.
 
-    handler(kwargs) 가 응답 문자열을 반환하거나 예외를 던진다.
+    handler(kwargs) 가 응답을 반환하거나 예외를 던진다. 반환값은 두 형태를 지원한다:
+      - 문자열/None: 본문. finish_reason 은 기본 "stop".
+      - (content, finish_reason) 튜플: 본문과 종료 사유를 함께 지정(잘림 등 케이스용).
     호출 기록은 self.calls 에 쌓인다.
     """
 
@@ -38,9 +40,10 @@ class FakeClient:
 
     def _create(self, **kwargs):
         self.calls.append(kwargs)
-        content = self._handler(kwargs)  # 예외를 던질 수 있음
+        result = self._handler(kwargs)  # 예외를 던질 수 있음
+        content, finish_reason = result if isinstance(result, tuple) else (result, "stop")
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")]
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason=finish_reason)]
         )
 
 
@@ -197,29 +200,17 @@ def test_map_partial_failure_within_threshold_marks_missing_and_proceeds():
 def test_truncated_length_finish_reason_falls_back_to_next_model():
     # reasoning 모델이 사고과정에서 max_tokens 를 소진해 본문이 잘린 경우(finish_reason="length").
     # 잘린 사고과정을 요약으로 저장하면 안 되므로 실패로 보고 다음 모델로 폴백해야 한다.
-    calls: list[dict] = []
-
-    def create(**kwargs):
-        calls.append(kwargs)
+    def handler(kwargs):
         if kwargs["model"] == "m1":
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content="We need to produce final summary in Korean..."),
-                        finish_reason="length",
-                    )
-                ]
-            )
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="## 핵심 요약\n- ok"), finish_reason="stop")]
-        )
+            return ("We need to produce final summary in Korean...", "length")
+        return ("## 핵심 요약\n- ok", "stop")
 
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    client = FakeClient(handler)
 
     result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2"), "max_retries": 1})
 
     assert "핵심 요약" in result
-    assert [c["model"] for c in calls][-1] == "m2"  # 잘린 m1 버리고 m2 로 폴백
+    assert [c["model"] for c in client.calls][-1] == "m2"  # 잘린 m1 버리고 m2 로 폴백
 
 
 def test_reasoning_exclude_passed_in_extra_body():
@@ -239,8 +230,52 @@ def test_inline_think_block_is_stripped_from_content():
     result = _summarize([_chunk(0, "회의")], client)
 
     assert "<think>" not in result
-    assert "사고과정" not in result
     assert result.startswith("## 핵심 요약")
+
+
+def test_unclosed_think_block_does_not_leak_to_summary():
+    # 모델이 <think> 를 닫지 않고 finish_reason="stop" 으로 끝낸 누출 변종.
+    # 닫는 태그가 없어도 끝까지 제거되어 raw 사고과정이 요약으로 새어나가면 안 된다.
+    # 본문이 통째로 사고과정이므로 제거 후 빈 문자열 → 누출로 보고 다음 모델로 폴백.
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            return "<think>닫는 태그 없이 영어로 주절주절 사고만 하다 끝남"
+        return "## 핵심 요약\n- ok"
+
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2")})
+
+    assert "<think>" not in result
+    assert result.startswith("## 핵심 요약")
+    assert [c["model"] for c in client.calls][-1] == "m2"  # 누출난 m1 버리고 m2 로 폴백
+
+
+def test_think_only_content_skips_retry_and_falls_back():
+    # provider 가 exclude 를 무시하고 본문 없이 <think>...</think> 만 보낸 경우.
+    # 빈 응답으로 뭉개지 않고 ReasoningLeakError 로 분류 → 결정적이라 재시도 없이 바로 다음 모델로.
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            return "<think>사고과정만 잔뜩 하고 본문은 없음</think>"
+        return "## 핵심 요약\n- ok"
+
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2"), "max_retries": 3})
+
+    assert result.startswith("## 핵심 요약")
+    # 재시도 스킵: m1 은 결정적 누출이라 max_retries(3) 만큼 재시도하지 않고 단 한 번만 호출.
+    m1_calls = [c for c in client.calls if c["model"] == "m1"]
+    assert len(m1_calls) == 1
+
+
+def test_think_only_on_all_models_raises_reasoning_leak_error():
+    # 모든 모델이 사고과정만 누출하면 ReasoningLeakError(SummarizationError) 로 실패한다.
+    client = FakeClient(lambda _: "<think>본문 없이 사고만</think>")
+
+    with pytest.raises(SummarizationError):
+        _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1",), "max_retries": 2})
+
+    # 단일 모델·결정적 누출 → 재시도 없이 단 한 번만 호출.
+    assert len(client.calls) == 1
 
 
 def test_content_none_is_distinguished_and_falls_back_to_next_model():

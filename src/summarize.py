@@ -22,19 +22,27 @@ from openai import (
 
 from src.chunking import Chunk
 from src.config import SummarizeConfig
-from src.exceptions import SummarizationError
+from src.exceptions import ReasoningLeakError, SummarizationError
 
 logger = logging.getLogger(__name__)
 
 PCT_FULL = 100.0
 
+# OpenAI chat completions 의 finish_reason 값. max_tokens 소진으로 본문이 잘린 경우.
+_FINISH_REASON_LENGTH = "length"
+
 # 일부 reasoning 모델은 OpenRouter reasoning.exclude 를 무시하고 content 에 사고과정을
 # <think>...</think> 로 인라인으로 남긴다. 본문에서 방어적으로 제거한다.
-_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# 닫는 태그 없이 <think>... 로 끝나는(finish_reason="stop") 누출 변종까지 잡도록
+# 닫는 태그를 선택적으로(`</think>|$`) 둔다 — 안 그러면 raw 사고과정이 요약으로 새어나간다.
+_THINK_BLOCK = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_reasoning(text: str) -> str:
-    """content 에 인라인으로 남은 ``<think>...</think>`` 블록을 제거한다."""
+    """content 에 인라인으로 남은 ``<think>...</think>`` 블록을 제거한다.
+
+    닫는 태그가 없는 누출(모델이 사고과정만 내고 종료)도 문자열 끝까지 제거한다.
+    """
     return _THINK_BLOCK.sub("", text).strip()
 
 
@@ -160,6 +168,11 @@ def _complete_with_fallback(
                 return content.strip()
             except _FATAL_ERRORS as exc:
                 raise SummarizationError(f"인증/권한 오류로 요약을 중단합니다(키를 확인하세요): {exc}") from exc
+            except ReasoningLeakError as exc:
+                # 사고과정 누출은 같은 모델로 재시도해도 결정적으로 동일하다 → 재시도 낭비 없이 다음 모델로.
+                last_error = exc
+                logger.warning("모델 %s 사고과정 누출 — 재시도 생략, 다음 모델로: %s", model, exc)
+                break
             except _SKIP_MODEL_ERRORS as exc:
                 last_error = exc
                 logger.warning("모델 %s 비재시도성 오류 — 재시도 생략, 다음 모델로: %s", model, exc)
@@ -195,26 +208,37 @@ def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: Open
         temperature=config.temperature,
         timeout=config.request_timeout_sec,
         # reasoning 모델이 사고과정(<think>)으로 토큰을 소진해 본문을 못 내는 것을 막는다.
-        # effort=low 로 사고량을 줄이고, exclude=true 로 사고 텍스트를 응답에서 분리한다(OpenRouter 확장).
+        # effort=low 로 사고량을 줄이고, exclude=true 로 사고 텍스트 제거를 요청한다(OpenRouter 확장).
+        # exclude 는 보장이 아니라 best-effort 힌트라 일부 provider 는 무시한다 — 그래서 본문에
+        # 남는 <think> 누출은 _strip_reasoning 으로 한 번 더 방어한다.
         extra_body={"reasoning": {"effort": "low", "exclude": True}},
     )
     if not resp.choices:
         raise SummarizationError(f"{model} 응답에 choices 가 없습니다(콘텐츠 필터/쿼터 가능).")
 
     choice = resp.choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
     content = choice.message.content
     # content=None 은 빈 문자열과 다른 신호다(콘텐츠 필터/툴콜 등). 사유를 남겨 진단을 돕는다.
     if content is None:
         raise SummarizationError(
-            f"{model} 이 본문 없이 응답했습니다(content=None, finish_reason={choice.finish_reason}). "
+            f"{model} 이 본문 없이 응답했습니다(content=None, finish_reason={finish_reason}). "
             "콘텐츠 필터 또는 비정상 종료 가능."
         )
     # 사고과정이 max_tokens 를 소진해 본문이 잘린 경우. 잘린 사고과정을 요약으로 저장하면 안 되므로
     # 실패로 보고 재시도/폴백을 유도한다(reasoning 모델에서 흔함).
-    if getattr(choice, "finish_reason", None) == "length":
+    if finish_reason == _FINISH_REASON_LENGTH:
         raise SummarizationError(
             f"{model} 응답이 max_tokens({config.max_tokens})에서 잘렸습니다"
             "(reasoning 모델이 사고과정에서 토큰을 소진했을 가능성). "
             "configs/pipeline.yaml 의 summarize.max_tokens 를 늘리거나 비-reasoning 모델을 쓰세요."
         )
-    return _strip_reasoning(content)
+    stripped = _strip_reasoning(content)
+    # <think> 제거 후 본문이 남지 않으면 provider 가 exclude 를 무시하고 사고과정만 보낸 것이다.
+    # 빈 응답으로 뭉개면 원인 진단이 불가하고 재시도만 낭비되므로 전용 에러로 폴백을 유도한다.
+    if not stripped:
+        raise ReasoningLeakError(
+            f"{model} 이 본문 없이 사고과정(<think>)만 반환했습니다(finish_reason={finish_reason}). "
+            "provider 가 reasoning.exclude 를 무시했을 가능성 — 재시도 없이 다음 모델로 폴백합니다."
+        )
+    return stripped
