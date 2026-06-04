@@ -61,7 +61,21 @@ def test_store_creates_dir(tmp_path):
 def test_store_no_tmp_leftover(tmp_path):
     cache.store(tmp_path, "k", _segments())
     # 원자적 쓰기: 최종 .json 만 남고 임시 파일 잔여물이 없어야 한다.
-    assert [p.name for p in tmp_path.iterdir()] == ["k.json"]
+    assert (tmp_path / "k.json").is_file()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_store_cleans_tmp_on_replace_failure(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    def _boom(self, target):
+        raise OSError("rename 실패")
+
+    monkeypatch.setattr(_P, "replace", _boom)
+    cache.store(tmp_path, "k", _segments())  # 예외 전파 없이 로그만
+    # 최종 json도 없고, tmp 잔여물도 없어야 한다
+    assert list(tmp_path.glob("*.tmp")) == []
+    assert not (tmp_path / "k.json").exists()
 
 
 def test_load_missing_key_returns_none(tmp_path):

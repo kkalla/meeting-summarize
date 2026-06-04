@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -57,13 +58,15 @@ def store(cache_dir: Path, key: str, segments: list[Segment]) -> None:
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "segments": [asdict(seg) for seg in segments],
     }
+    tmp = cache_dir / f".{key}{_SUFFIX}.tmp"
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp = cache_dir / f".{key}{_SUFFIX}.tmp"
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         tmp.replace(_cache_path(cache_dir, key))
     except OSError as exc:
         logger.warning("전사 캐시 저장 실패(무시): %s (%s)", key, exc)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
 
 
 def load(cache_dir: Path, key: str) -> list[Segment] | None:
