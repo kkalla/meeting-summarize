@@ -79,3 +79,4 @@ watcher:
     - ".mp3"
     - ".mp4"
     - ".m4v"
+    - ".qta"  # Apple 보이스메모/QuickTime 컨테이너(AAC). ffmpeg 가 내용 probe 로 디코딩.
