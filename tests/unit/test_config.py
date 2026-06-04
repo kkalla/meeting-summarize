@@ -7,9 +7,13 @@ frozen dataclass 의 ``__post_init__`` 가 도메인 범위를 벗어난 값을 
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+# --- CacheConfig ----------------------------------------------------------
 from src.config import (
+    CacheConfig,  # noqa: E402  (테스트 가독성 위해 지역 import)
     ChunkingConfig,
     ConfidenceGate,
     SttConfig,
@@ -17,6 +21,32 @@ from src.config import (
     _build_config,
 )
 from src.exceptions import DependencyError
+
+
+def test_cache_config_rejects_non_positive_ttl_when_enabled():
+    with pytest.raises(DependencyError):
+        CacheConfig(transcripts_dir=Path("/data/transcripts"), ttl_hours=0, enabled=True)
+
+
+def test_cache_config_allows_any_ttl_when_disabled():
+    # disabled 면 ttl 은 쓰이지 않으므로 검증하지 않는다.
+    cfg = CacheConfig(transcripts_dir=Path("/data/transcripts"), ttl_hours=0, enabled=False)
+    assert cfg.enabled is False
+
+
+def test_build_config_parses_cache_section():
+    raw = _raw()
+    raw["cache"] = {"transcripts_dir": "/data/transcripts", "ttl_hours": 168, "enabled": True}
+    cfg = _build_config(raw, api_key="k")
+    assert cfg.cache.enabled is True
+    assert cfg.cache.transcripts_dir == Path("/data/transcripts")
+    assert cfg.cache.ttl_hours == 168.0
+
+
+def test_build_config_missing_cache_section_defaults_disabled():
+    raw = _raw()  # cache 키 없음
+    cfg = _build_config(raw, api_key="k")
+    assert cfg.cache.enabled is False
 
 
 def _raw() -> dict:
