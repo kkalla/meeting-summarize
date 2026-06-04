@@ -8,10 +8,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from src.exceptions import CacheError
+from src.transcribe import Segment
 
 logger = logging.getLogger(__name__)
 
@@ -35,3 +39,50 @@ def compute_key(audio_path: Path) -> str:
     except OSError as exc:
         raise CacheError(f"캐시 키 계산용 파일을 읽을 수 없습니다: {audio_path} ({exc})") from exc
     return digest.hexdigest()
+
+
+def _cache_path(cache_dir: Path, key: str) -> Path:
+    return cache_dir / f"{key}{_SUFFIX}"
+
+
+def store(cache_dir: Path, key: str, segments: list[Segment]) -> None:
+    """전사 결과를 캐시에 원자적으로 저장한다.
+
+    tmp 파일에 쓰고 같은 디렉토리 내에서 rename 해 부분 쓰인 캐시가 보이지 않게 한다.
+    저장 실패는 로그만 남기고 삼킨다(파이프라인을 막지 않는다 — 이번엔 캐시를 못 남길 뿐).
+    """
+    payload = {
+        "version": CACHE_VERSION,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "segments": [asdict(seg) for seg in segments],
+    }
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = cache_dir / f".{key}{_SUFFIX}.tmp"
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_cache_path(cache_dir, key))
+    except OSError as exc:
+        logger.warning("전사 캐시 저장 실패(무시): %s (%s)", key, exc)
+
+
+def load(cache_dir: Path, key: str) -> list[Segment] | None:
+    """캐시를 조회한다. HIT 면 list[Segment], 그 외(없음/손상/버전불일치)면 None.
+
+    None 은 "캐시 미스"로 해석되어 호출부가 재전사하면 된다(데이터 안전 우선).
+    """
+    path = _cache_path(cache_dir, key)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("전사 캐시 읽기/파싱 실패 — 미스 처리: %s (%s)", key, exc)
+        return None
+    if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
+        logger.warning("전사 캐시 버전 불일치/구조 손상 — 미스 처리: %s", key)
+        return None
+    try:
+        return [Segment(**seg) for seg in data["segments"]]
+    except (KeyError, TypeError) as exc:
+        logger.warning("전사 캐시 스키마 손상 — 미스 처리: %s (%s)", key, exc)
+        return None
