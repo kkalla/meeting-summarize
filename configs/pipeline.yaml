@@ -47,9 +47,9 @@ summarize:
   # OpenRouter 폴백 체인. 위에서부터 순서대로 시도.
   # 주의: 전부 :free 면 공용 쿼터라 상관 장애 위험(Ask First 대상).
   models:
-    - "google/gemini-2.0-flash-exp:free"
-    - "deepseek/deepseek-chat-v3-0324:free"
-    - "meta-llama/llama-3.3-70b-instruct:free"
+    - "nvidia/nemotron-3-super-120b-a12b:free"
+    - "google/gemma-4-31b-it:free"
+    - "openai/gpt-oss-120b:free"
   base_url: "https://openrouter.ai/api/v1"
   # 모델당 429/타임아웃 재시도 횟수.
   max_retries: 4
