@@ -7,6 +7,8 @@ Segment 필드(None 포함)를 보존하며, 손상/버전불일치 캐시는 �
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime
 
 import pytest
 
@@ -82,3 +84,32 @@ def test_load_broken_schema_returns_none(tmp_path):
     payload = {"version": cache.CACHE_VERSION, "segments": [{"bogus": 1}]}
     (tmp_path / "k.json").write_text(json.dumps(payload), encoding="utf-8")
     assert cache.load(tmp_path, "k") is None
+
+
+def test_purge_expired_removes_only_old(tmp_path):
+    fresh = tmp_path / "fresh.json"
+    stale = tmp_path / "stale.json"
+    fresh.write_text("{}", encoding="utf-8")
+    stale.write_text("{}", encoding="utf-8")
+    # stale 의 mtime 을 48시간 전으로 되돌린다.
+    old = datetime.now().timestamp() - 48 * 3600
+    os.utime(stale, (old, old))
+
+    removed = cache.purge_expired(tmp_path, ttl_hours=24)
+
+    assert removed == 1
+    assert fresh.is_file()
+    assert not stale.is_file()
+
+
+def test_purge_expired_missing_dir_returns_zero(tmp_path):
+    assert cache.purge_expired(tmp_path / "nope", ttl_hours=24) == 0
+
+
+def test_purge_expired_ignores_non_json(tmp_path):
+    other = tmp_path / "keep.txt"
+    other.write_text("x", encoding="utf-8")
+    old = datetime.now().timestamp() - 48 * 3600
+    os.utime(other, (old, old))
+    assert cache.purge_expired(tmp_path, ttl_hours=24) == 0
+    assert other.is_file()

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -86,3 +87,22 @@ def load(cache_dir: Path, key: str) -> list[Segment] | None:
     except (KeyError, TypeError) as exc:
         logger.warning("전사 캐시 스키마 손상 — 미스 처리: %s (%s)", key, exc)
         return None
+
+
+def purge_expired(cache_dir: Path, ttl_hours: float) -> int:
+    """mtime 이 TTL 을 넘긴 캐시 파일(*.json)을 삭제하고 삭제 개수를 반환한다.
+
+    개별 파일 삭제 실패(권한/경합 등)는 건너뛰고 계속한다. 디렉토리가 없으면 0.
+    """
+    if not cache_dir.is_dir():
+        return 0
+    cutoff = time.time() - ttl_hours * 3600
+    removed = 0
+    for path in cache_dir.glob(f"*{_SUFFIX}"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError as exc:
+            logger.warning("캐시 파일 삭제 실패(건너뜀): %s (%s)", path.name, exc)
+    return removed
