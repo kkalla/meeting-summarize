@@ -117,7 +117,9 @@ class FolderWatcher:
             self._snapshots.pop(tracked, None)
             self._stable_counts.pop(tracked, None)
         # 격리 파일이 inbox 에서 치워졌으면 격리 목록에서도 잊는다(메모리 누수 방지).
-        for gone in [p for p in self._quarantined if p not in present]:
+        # 격리 파일은 _list_candidates 에서 제외돼 `present` 에 절대 없으므로, 후보목록이
+        # 아니라 실제 파일 존재로 판단해야 한다(아니면 매 스캔 즉시 해제돼 재처리 반복).
+        for gone in [p for p in self._quarantined if not p.exists()]:
             self._quarantined.discard(gone)
 
     def _is_stable(self, path: Path) -> bool:

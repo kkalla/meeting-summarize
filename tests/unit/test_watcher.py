@@ -247,9 +247,17 @@ def test_permanent_move_failure_quarantines_and_stops_reprocessing(watcher, monk
     assert audio in watcher._quarantined
 
     # 격리된 파일은 이후 스캔에서 재처리되지 않는다(STT+요약 무한 반복 차단).
-    watcher._scan_once()
-    watcher._scan_once()
+    # 회귀 가드: 격리 정리가 후보목록(present) 기준이면 매 (stability_checks+1) 주기마다
+    # 격리가 풀려 재처리됐다. 파일이 inbox 에 남아있는 한 격리가 유지돼야 한다.
+    for _ in range(8):
+        watcher._scan_once()
+        assert audio in watcher._quarantined
     assert len(pipeline_calls) == 1
+
+    # 운영자가 파일을 치우면 격리 목록에서도 잊는다(메모리 누수 방지).
+    audio.unlink()
+    watcher._scan_once()
+    assert audio not in watcher._quarantined
 
 
 def test_move_falls_back_to_shutil_on_exdev(watcher, monkeypatch):
