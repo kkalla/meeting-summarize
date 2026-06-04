@@ -111,6 +111,19 @@ def apply_confidence_gate(segments: list[Segment], gate: ConfidenceGate) -> None
     if not segments:
         raise TranscriptionError("전사 결과가 없습니다(세그먼트 0개). 입력 오디오를 확인하세요.")
 
+    # 신뢰도 데이터(no_speech_prob/avg_logprob)가 둘 다 없으면 게이트가 그 세그먼트를
+    # 낙관적으로 통과시킨다. 이런 세그먼트가 많으면 게이트가 사실상 무력화된 것이므로
+    # 침묵하지 않고 경고한다(whisper.cpp 빌드가 확률을 출력하지 않는 경우 등).
+    ungated = sum(1 for seg in segments if seg.text and not _has_confidence_data(seg))
+    if ungated:
+        ungated_ratio = ungated / len(segments)
+        logger.warning(
+            "신뢰도 데이터 없는 세그먼트 %d/%d (%.0f%%) — 해당 세그먼트는 게이트를 우회합니다.",
+            ungated,
+            len(segments),
+            ungated_ratio * 100,
+        )
+
     valid = sum(1 for seg in segments if _is_valid_speech(seg, gate))
     ratio = valid / len(segments)
     if ratio < gate.min_valid_ratio:
@@ -213,8 +226,17 @@ def _wav_duration_sec(wav_path: Path) -> float:
     return frames / float(rate)
 
 
+def _has_confidence_data(seg: Segment) -> bool:
+    """세그먼트에 게이트가 판정에 쓸 신뢰도 데이터가 하나라도 있는지 검사한다."""
+    return seg.no_speech_prob is not None or seg.avg_logprob is not None
+
+
 def _is_valid_speech(seg: Segment, gate: ConfidenceGate) -> bool:
-    """세그먼트가 유효 음성으로 판정되는지 검사한다."""
+    """세그먼트가 유효 음성으로 판정되는지 검사한다.
+
+    신뢰도 데이터가 둘 다 없으면 판정 근거가 없으므로 낙관적으로 통과시킨다
+    (게이트 우회). 이 비율은 :func:`apply_confidence_gate` 가 별도로 경고한다.
+    """
     if not seg.text:
         return False
     if seg.no_speech_prob is not None and seg.no_speech_prob > gate.max_no_speech_prob:

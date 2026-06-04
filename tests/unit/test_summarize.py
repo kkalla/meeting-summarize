@@ -190,3 +190,15 @@ def test_map_partial_failure_within_threshold_marks_missing_and_proceeds():
     reduce_call = client.calls[-1]["messages"][0]["content"]
     assert "누락" in reduce_call  # 실패 구간이 Reduce 입력에 명시됨
     assert result == "부분요약"
+
+
+def test_content_none_is_distinguished_and_falls_back_to_next_model():
+    # m1 은 본문 없이(content=None) 응답 → 빈 문자열로 뭉개지 않고 다음 모델로 폴백.
+    def handler(kwargs):
+        return None if kwargs["model"] == "m1" else "## 핵심\n- ok"
+
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "짧은 회의")], client, config_kwargs={"models": ("m1", "m2")})
+
+    assert result == "## 핵심\n- ok"
+    assert [c["model"] for c in client.calls][-1] == "m2"

@@ -49,6 +49,15 @@ class ConfidenceGate:
     min_avg_logprob: float
     min_valid_ratio: float
 
+    def __post_init__(self) -> None:
+        # 도메인 범위를 벗어난 임계값은 게이트를 조용히 무력화하므로 생성 시점에 막는다.
+        if not 0.0 <= self.max_no_speech_prob <= 1.0:
+            raise DependencyError(f"max_no_speech_prob 은 [0, 1] 이어야 합니다: {self.max_no_speech_prob}")
+        if self.min_avg_logprob > 0.0:
+            raise DependencyError(f"min_avg_logprob 은 로그확률이므로 <= 0 이어야 합니다: {self.min_avg_logprob}")
+        if not 0.0 < self.min_valid_ratio <= 1.0:
+            raise DependencyError(f"min_valid_ratio 는 (0, 1] 이어야 합니다: {self.min_valid_ratio}")
+
 
 @dataclass(frozen=True)
 class SttConfig:
@@ -70,6 +79,22 @@ class ChunkingConfig:
     overlap_sec: int
     single_shot_max_chars: int
 
+    def __post_init__(self) -> None:
+        # minutes<=0 이면 chunk_segments 의 윈도우가 전진하지 않아 무한루프에 빠진다.
+        if self.minutes <= 0:
+            raise DependencyError(f"chunking.minutes 는 양수여야 합니다: {self.minutes}")
+        if self.overlap_sec < 0:
+            raise DependencyError(f"chunking.overlap_sec 은 0 이상이어야 합니다: {self.overlap_sec}")
+        if self.overlap_sec >= self.minutes * 60:
+            raise DependencyError(
+                f"chunking.overlap_sec({self.overlap_sec}s) 가 청크 길이({self.minutes * 60}s) 이상이면 "
+                "모든 청크가 동일 구간을 중복 요약하게 됩니다."
+            )
+        if self.single_shot_max_chars < 0:
+            raise DependencyError(
+                f"chunking.single_shot_max_chars 는 0 이상이어야 합니다: {self.single_shot_max_chars}"
+            )
+
 
 @dataclass(frozen=True)
 class SummarizeConfig:
@@ -83,6 +108,19 @@ class SummarizeConfig:
     max_tokens: int
     temperature: float
     max_chunk_failure_pct: float
+
+    def __post_init__(self) -> None:
+        # 잘못된 값은 요약 실행 시점(폴백 루프 한가운데)에서야 터지므로 로딩 때 막는다.
+        if not self.models:
+            raise DependencyError("summarize.models 는 비어 있을 수 없습니다.")
+        if self.max_retries < 1:
+            raise DependencyError(f"summarize.max_retries 는 1 이상이어야 합니다: {self.max_retries}")
+        if not 0.0 <= self.temperature <= 2.0:
+            raise DependencyError(f"summarize.temperature 는 [0, 2] 이어야 합니다: {self.temperature}")
+        if not 0.0 <= self.max_chunk_failure_pct <= 100.0:
+            raise DependencyError(
+                f"summarize.max_chunk_failure_pct 는 [0, 100] 이어야 합니다: {self.max_chunk_failure_pct}"
+            )
 
 
 @dataclass(frozen=True)
@@ -133,44 +171,55 @@ def load_config(
 
 
 def _build_config(raw: dict, api_key: str) -> PipelineConfig:
-    """파싱된 dict 를 dataclass 트리로 변환한다."""
-    audio_raw = raw["audio"]
-    stt_raw = raw["stt"]
-    gate_raw = stt_raw["confidence_gate"]
-    chunk_raw = raw["chunking"]
-    sum_raw = raw["summarize"]
+    """파싱된 dict 를 dataclass 트리로 변환한다.
 
-    return PipelineConfig(
-        audio=AudioConfig(
-            sample_rate=int(audio_raw["sample_rate"]),
-            timeout_sec=int(audio_raw["timeout_sec"]),
-        ),
-        stt=SttConfig(
-            whisper_cli=_resolve_resource(str(stt_raw["whisper_cli"])),
-            model_path=_resolve_resource(str(stt_raw["model_path"])),
-            language=str(stt_raw["language"]),
-            timeout_sec=int(stt_raw["timeout_sec"]),
-            confidence_gate=ConfidenceGate(
-                max_no_speech_prob=float(gate_raw["max_no_speech_prob"]),
-                min_avg_logprob=float(gate_raw["min_avg_logprob"]),
-                min_valid_ratio=float(gate_raw["min_valid_ratio"]),
+    Raises:
+        DependencyError: YAML 에 필수 섹션/키가 없거나 값 타입이 잘못됐을 때.
+            (CLI 가 PipelineError 만 잡으므로 raw KeyError/TypeError 노출을 막는다.)
+    """
+    try:
+        audio_raw = raw["audio"]
+        stt_raw = raw["stt"]
+        gate_raw = stt_raw["confidence_gate"]
+        chunk_raw = raw["chunking"]
+        sum_raw = raw["summarize"]
+
+        return PipelineConfig(
+            audio=AudioConfig(
+                sample_rate=int(audio_raw["sample_rate"]),
+                timeout_sec=int(audio_raw["timeout_sec"]),
             ),
-            completeness_tolerance_sec=float(stt_raw["completeness_tolerance_sec"]),
-        ),
-        chunking=ChunkingConfig(
-            minutes=int(chunk_raw["minutes"]),
-            overlap_sec=int(chunk_raw["overlap_sec"]),
-            single_shot_max_chars=int(chunk_raw["single_shot_max_chars"]),
-        ),
-        summarize=SummarizeConfig(
-            models=tuple(str(m) for m in sum_raw["models"]),
-            base_url=str(sum_raw["base_url"]),
-            max_retries=int(sum_raw["max_retries"]),
-            backoff_base=float(sum_raw["backoff_base"]),
-            request_timeout_sec=int(sum_raw["request_timeout_sec"]),
-            max_tokens=int(sum_raw["max_tokens"]),
-            temperature=float(sum_raw["temperature"]),
-            max_chunk_failure_pct=float(sum_raw["max_chunk_failure_pct"]),
-        ),
-        api_key=api_key,
-    )
+            stt=SttConfig(
+                whisper_cli=_resolve_resource(str(stt_raw["whisper_cli"])),
+                model_path=_resolve_resource(str(stt_raw["model_path"])),
+                language=str(stt_raw["language"]),
+                timeout_sec=int(stt_raw["timeout_sec"]),
+                confidence_gate=ConfidenceGate(
+                    max_no_speech_prob=float(gate_raw["max_no_speech_prob"]),
+                    min_avg_logprob=float(gate_raw["min_avg_logprob"]),
+                    min_valid_ratio=float(gate_raw["min_valid_ratio"]),
+                ),
+                completeness_tolerance_sec=float(stt_raw["completeness_tolerance_sec"]),
+            ),
+            chunking=ChunkingConfig(
+                minutes=int(chunk_raw["minutes"]),
+                overlap_sec=int(chunk_raw["overlap_sec"]),
+                single_shot_max_chars=int(chunk_raw["single_shot_max_chars"]),
+            ),
+            summarize=SummarizeConfig(
+                models=tuple(str(m) for m in sum_raw["models"]),
+                base_url=str(sum_raw["base_url"]),
+                max_retries=int(sum_raw["max_retries"]),
+                backoff_base=float(sum_raw["backoff_base"]),
+                request_timeout_sec=int(sum_raw["request_timeout_sec"]),
+                max_tokens=int(sum_raw["max_tokens"]),
+                temperature=float(sum_raw["temperature"]),
+                max_chunk_failure_pct=float(sum_raw["max_chunk_failure_pct"]),
+            ),
+            api_key=api_key,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DependencyError(
+            f"pipeline.yaml 설정이 올바르지 않습니다({type(exc).__name__}: {exc}). "
+            "configs/pipeline.yaml 의 필수 키와 값 타입을 확인하세요."
+        ) from exc

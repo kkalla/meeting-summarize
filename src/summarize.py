@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 
 from openai import (
+    APIError,
     AuthenticationError,
     BadRequestError,
     NotFoundError,
@@ -152,19 +153,20 @@ def _complete_with_fallback(
                 last_error = exc
                 logger.warning("모델 %s 비재시도성 오류 — 재시도 생략, 다음 모델로: %s", model, exc)
                 break
-            except (
-                Exception
-            ) as exc:  # noqa: BLE001 - 일시 오류(429/타임아웃/5xx 등) 재시도/폴백 위해 광범위하게 잡고 로깅
+            except Exception as exc:  # noqa: BLE001 - 일시 오류(429/타임아웃/5xx 등) 재시도/폴백 위해 광범위하게 잡음
                 last_error = exc
-                is_last_attempt = attempt == config.max_retries - 1
-                logger.warning(
-                    "모델 %s 호출 실패 (시도 %d/%d): %s",
-                    model,
-                    attempt + 1,
-                    config.max_retries,
-                    exc,
-                )
-                if not is_last_attempt:
+                # APIError(RateLimit/Timeout/Connection/InternalServer 등) 는 예상된 일시 오류라
+                # 메시지만, 그 외(AttributeError/TypeError 등 코딩 버그 가능성)는 스택트레이스를 남긴다.
+                if isinstance(exc, APIError):
+                    logger.warning("모델 %s 호출 실패 (시도 %d/%d): %s", model, attempt + 1, config.max_retries, exc)
+                else:
+                    logger.exception(
+                        "모델 %s 호출 중 예상치 못한 예외 (시도 %d/%d) — 버그 가능성",
+                        model,
+                        attempt + 1,
+                        config.max_retries,
+                    )
+                if attempt < config.max_retries - 1:
                     sleep_fn(config.backoff_base**attempt)
         logger.warning("모델 %s 폴백 — 다음 모델로 전환", model)
 
@@ -184,4 +186,13 @@ def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: Open
     )
     if not resp.choices:
         raise SummarizationError(f"{model} 응답에 choices 가 없습니다(콘텐츠 필터/쿼터 가능).")
-    return resp.choices[0].message.content or ""
+
+    choice = resp.choices[0]
+    content = choice.message.content
+    # content=None 은 빈 문자열과 다른 신호다(콘텐츠 필터/툴콜 등). 사유를 남겨 진단을 돕는다.
+    if content is None:
+        raise SummarizationError(
+            f"{model} 이 본문 없이 응답했습니다(content=None, finish_reason={choice.finish_reason}). "
+            "콘텐츠 필터 또는 비정상 종료 가능."
+        )
+    return content
