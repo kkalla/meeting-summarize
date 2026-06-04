@@ -82,6 +82,16 @@ class SttConfig:
     timeout_sec: int
     confidence_gate: ConfidenceGate
     completeness_tolerance_sec: float
+    # 전사 소요시간 추정용 RTF(real-time factor): 예상시간 = 오디오길이 × rtf_estimate.
+    # 시작 로그에 예상 소요시간을 찍는 데만 쓰이는 휴리스틱이라 전사 동작에는 영향 없음.
+    # 모델/하드웨어(Metal 가속 여부 등)마다 다르므로 실측 후 보정한다.
+    rtf_estimate: float
+
+    def __post_init__(self) -> None:
+        # 0/음수면 예상시간이 0 이하로 찍혀 의미가 없다. ETA 표시 전용 값이므로
+        # 전사를 막지는 않되, 명백히 잘못된 설정은 로딩 시점에 거른다.
+        if self.rtf_estimate <= 0.0:
+            raise DependencyError(f"stt.rtf_estimate 는 양수여야 합니다: {self.rtf_estimate}")
 
 
 @dataclass(frozen=True)
@@ -240,6 +250,7 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
                     min_valid_ratio=float(gate_raw["min_valid_ratio"]),
                 ),
                 completeness_tolerance_sec=float(stt_raw["completeness_tolerance_sec"]),
+                rtf_estimate=float(stt_raw["rtf_estimate"]),
             ),
             chunking=ChunkingConfig(
                 minutes=int(chunk_raw["minutes"]),

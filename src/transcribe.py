@@ -13,6 +13,7 @@ import math
 import shutil
 import subprocess
 import tempfile
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,12 +151,19 @@ def transcribe(wav_path: Path, config: SttConfig) -> list[Segment]:
     """
     _check_dependencies(config)
 
+    # 오디오 길이를 전사 전에 구해 시작 로그에 예상 소요시간을 함께 찍는다(완전성 검사에도 재사용).
+    duration = _wav_duration_sec(wav_path)
+
+    started = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
         prefix = Path(tmp) / "out"
-        data = _run_whisper(wav_path, prefix, config)
+        data = _run_whisper(wav_path, prefix, config, duration)
+    elapsed = time.monotonic() - started
+    # 실제 소요시간과 RTF 를 남겨, 다음 전사의 예상치(rtf_estimate) 보정 근거로 쓴다.
+    actual_rtf = elapsed / duration if duration > 0 else 0.0
+    logger.info("whisper-cli 전사 종료: 실제 %.0f초 (오디오 %.0f초, RTF %.2f)", elapsed, duration, actual_rtf)
 
     segments = parse_segments(data)
-    duration = _wav_duration_sec(wav_path)
     check_completeness(segments, duration, config.completeness_tolerance_sec)
     apply_confidence_gate(segments, config.confidence_gate)
     return segments
@@ -172,8 +180,15 @@ def _check_dependencies(config: SttConfig) -> None:
         raise DependencyError(f"whisper 모델이 없습니다: {config.model_path}. './setup.sh' 로 모델을 받으세요.")
 
 
-def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig) -> dict:
-    """whisper-cli 를 실행하고 생성된 JSON 을 파싱해 반환한다."""
+def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig, duration_sec: float | None = None) -> dict:
+    """whisper-cli 를 실행하고 생성된 JSON 을 파싱해 반환한다.
+
+    Args:
+        wav_path: 입력 WAV 경로.
+        prefix: whisper-cli 출력 파일 prefix.
+        config: STT 설정.
+        duration_sec: 오디오 길이(초). 주어지면 시작 로그에 예상 소요시간을 함께 찍는다.
+    """
     cmd = [
         config.whisper_cli,
         "-m",
@@ -187,7 +202,16 @@ def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig) -> dict:
         "-of",
         str(prefix),
     ]
-    logger.info("whisper-cli 전사 시작: %s", wav_path)
+    if duration_sec is not None:
+        eta_sec = duration_sec * config.rtf_estimate
+        logger.info(
+            "whisper-cli 전사 시작: %s (오디오 %.0f초, 예상 ~%.0f초)",
+            wav_path,
+            duration_sec,
+            eta_sec,
+        )
+    else:
+        logger.info("whisper-cli 전사 시작: %s", wav_path)
     try:
         result = subprocess.run(
             cmd,

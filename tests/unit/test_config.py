@@ -12,6 +12,7 @@ import pytest
 from src.config import (
     ChunkingConfig,
     ConfidenceGate,
+    SttConfig,
     SummarizeConfig,
     _build_config,
 )
@@ -33,6 +34,7 @@ def _raw() -> dict:
                 "min_valid_ratio": 0.2,
             },
             "completeness_tolerance_sec": 5.0,
+            "rtf_estimate": 0.2,
         },
         "chunking": {"minutes": 15, "overlap_sec": 30, "single_shot_max_chars": 12000},
         "summarize": {
@@ -74,6 +76,29 @@ def test_confidence_gate_rejects_out_of_range(kwargs):
     base.update(kwargs)
     with pytest.raises(DependencyError):
         ConfidenceGate(**base)
+
+
+# --- SttConfig ------------------------------------------------------------
+
+
+def _stt(**overrides):
+    base = {
+        "whisper_cli": "whisper-cli",
+        "model_path": "model.bin",
+        "language": "ko",
+        "timeout_sec": 3600,
+        "confidence_gate": ConfidenceGate(max_no_speech_prob=0.6, min_avg_logprob=-1.0, min_valid_ratio=0.2),
+        "completeness_tolerance_sec": 5.0,
+        "rtf_estimate": 0.2,
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.parametrize("rtf", [0.0, -0.5])
+def test_stt_config_rejects_non_positive_rtf_estimate(rtf):
+    with pytest.raises(DependencyError):
+        SttConfig(**_stt(rtf_estimate=rtf))
 
 
 # --- ChunkingConfig -------------------------------------------------------

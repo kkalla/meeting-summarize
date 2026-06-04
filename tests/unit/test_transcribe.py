@@ -26,6 +26,18 @@ def _gate(max_no_speech=0.6, min_avg_logprob=-1.0, min_valid_ratio=0.2) -> Confi
     )
 
 
+def _stt_config(rtf_estimate=0.2) -> SttConfig:
+    return SttConfig(
+        whisper_cli="/fake/whisper-cli",
+        model_path="/fake/model.bin",
+        language="ko",
+        timeout_sec=10,
+        confidence_gate=_gate(),
+        completeness_tolerance_sec=5.0,
+        rtf_estimate=rtf_estimate,
+    )
+
+
 # --- _run_whisper 예외 래핑 ------------------------------------------------
 
 
@@ -35,14 +47,7 @@ def test_run_whisper_wraps_oserror_as_transcription_error(tmp_path, monkeypatch)
         raise OSError("Permission denied")
 
     monkeypatch.setattr("src.transcribe.subprocess.run", boom)
-    config = SttConfig(
-        whisper_cli="/fake/whisper-cli",
-        model_path="/fake/model.bin",
-        language="ko",
-        timeout_sec=10,
-        confidence_gate=_gate(),
-        completeness_tolerance_sec=5.0,
-    )
+    config = _stt_config()
 
     # Act / Assert: 원시 OSError 가 아니라 TranscriptionError 로 변환되어야 한다
     with pytest.raises(TranscriptionError):
@@ -63,14 +68,7 @@ def test_run_whisper_tolerates_non_utf8_bytes_in_token_text(tmp_path, monkeypatc
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
-    config = SttConfig(
-        whisper_cli="/fake/whisper-cli",
-        model_path="/fake/model.bin",
-        language="ko",
-        timeout_sec=10,
-        confidence_gate=_gate(),
-        completeness_tolerance_sec=5.0,
-    )
+    config = _stt_config()
 
     # Act: invalid byte 가 있어도 파싱이 깨지지 않아야 한다
     data = _run_whisper(tmp_path / "a.wav", prefix, config)
@@ -80,6 +78,29 @@ def test_run_whisper_tolerates_non_utf8_bytes_in_token_text(tmp_path, monkeypatc
     assert len(segments) == 1
     assert segments[0].text == "안녕"
     assert segments[0].avg_logprob is not None
+
+
+def test_run_whisper_logs_eta_when_duration_given(tmp_path, monkeypatch, caplog):
+    # Arrange: 정상 JSON 을 내는 whisper, 오디오 100초 + rtf 0.2 → 예상 ~20초
+    prefix = tmp_path / "out"
+    prefix.with_suffix(".json").write_text(
+        '{"transcription": [{"offsets": {"from": 0, "to": 1000}, "text": "안녕"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "src.transcribe.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stderr=""),
+    )
+    config = _stt_config(rtf_estimate=0.2)
+
+    # Act
+    with caplog.at_level("INFO", logger="src.transcribe"):
+        _run_whisper(tmp_path / "a.wav", prefix, config, duration_sec=100.0)
+
+    # Assert: 시작 로그에 오디오 길이와 예상 소요시간(100×0.2=20초)이 찍힌다
+    start_log = next(r.message for r in caplog.records if "전사 시작" in r.message)
+    assert "오디오 100초" in start_log
+    assert "예상 ~20초" in start_log
 
 
 # --- parse_segments -------------------------------------------------------
