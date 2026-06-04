@@ -6,10 +6,11 @@ import math
 
 import pytest
 
-from src.config import ConfidenceGate
+from src.config import ConfidenceGate, SttConfig
 from src.exceptions import TranscriptionError
 from src.transcribe import (
     Segment,
+    _run_whisper,
     apply_confidence_gate,
     check_completeness,
     parse_segments,
@@ -22,6 +23,29 @@ def _gate(max_no_speech=0.6, min_avg_logprob=-1.0, min_valid_ratio=0.2) -> Confi
         min_avg_logprob=min_avg_logprob,
         min_valid_ratio=min_valid_ratio,
     )
+
+
+# --- _run_whisper 예외 래핑 ------------------------------------------------
+
+
+def test_run_whisper_wraps_oserror_as_transcription_error(tmp_path, monkeypatch):
+    # Arrange: subprocess 실행이 OSError(권한 없음/아키텍처 불일치) 를 던지는 상황
+    def boom(*_args, **_kwargs):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr("src.transcribe.subprocess.run", boom)
+    config = SttConfig(
+        whisper_cli="/fake/whisper-cli",
+        model_path="/fake/model.bin",
+        language="ko",
+        timeout_sec=10,
+        confidence_gate=_gate(),
+        completeness_tolerance_sec=5.0,
+    )
+
+    # Act / Assert: 원시 OSError 가 아니라 TranscriptionError 로 변환되어야 한다
+    with pytest.raises(TranscriptionError):
+        _run_whisper(tmp_path / "a.wav", tmp_path / "out", config)
 
 
 # --- parse_segments -------------------------------------------------------

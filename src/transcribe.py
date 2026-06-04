@@ -198,6 +198,10 @@ def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig) -> dict:
         )
     except subprocess.TimeoutExpired as exc:
         raise TranscriptionError(f"전사가 {config.timeout_sec}초 안에 끝나지 않았습니다.") from exc
+    except OSError as exc:
+        # 존재는 하지만 실행 불가(권한 없음/아키텍처 불일치/ENOEXEC 등) — 원시 OSError 가
+        # PipelineError 계층 밖으로 새지 않도록 래핑한다.
+        raise TranscriptionError(f"whisper-cli 실행에 실패했습니다(권한/아키텍처 확인): {exc}") from exc
 
     if result.returncode != 0:
         raise TranscriptionError(f"whisper-cli 실패 (exit {result.returncode}):\n{result.stderr.strip()}")

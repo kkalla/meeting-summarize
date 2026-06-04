@@ -65,6 +65,10 @@ def convert_to_wav(input_path: Path, output_path: Path, config: AudioConfig) -> 
         )
     except subprocess.TimeoutExpired as exc:
         raise PipelineError(f"ffmpeg 변환이 {config.timeout_sec}초 안에 끝나지 않았습니다.") from exc
+    except OSError as exc:
+        # 존재는 하지만 실행 불가(권한 없음/아키텍처 불일치/ENOEXEC 등) — 원시 OSError 가
+        # PipelineError 계층 밖으로 새지 않도록 래핑한다.
+        raise PipelineError(f"ffmpeg 실행에 실패했습니다(권한/아키텍처 확인): {exc}") from exc
 
     if result.returncode != 0:
         raise PipelineError(f"ffmpeg 변환 실패 (exit {result.returncode}):\n{result.stderr.strip()}")
