@@ -21,3 +21,7 @@ class TranscriptionError(PipelineError):
 
 class SummarizationError(PipelineError):
     """요약 실패: OpenRouter 호출이 재시도·폴백을 모두 소진했거나 허용 누락률 초과."""
+
+
+class CacheError(PipelineError):
+    """전사 캐시 조회/저장 실패. 치명적이지 않게 다룬다(캐시 없이 전사로 폴백)."""
