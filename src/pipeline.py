@@ -90,7 +90,7 @@ def _transcribe_or_load(input_path: Path, wav_path: Path, config: PipelineConfig
     if not cache_cfg.enabled:
         return transcribe(wav_path, config.stt)
     try:
-        key = cache.compute_key(input_path)
+        key = cache.compute_key(input_path, config.stt)
     except CacheError as exc:
         logger.warning("캐시 키 계산 실패 — 캐시 없이 전사: %s", exc)
         return transcribe(wav_path, config.stt)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,12 +18,17 @@ from src.exceptions import CacheError
 from src.transcribe import Segment
 
 
+def _stt(model_path: str = "ggml-large-v3-turbo.bin", language: str = "ko"):
+    """compute_key 가 보는 최소 STT 설정 더블 (model_path/language 만 읽는다)."""
+    return SimpleNamespace(model_path=model_path, language=language)
+
+
 def test_compute_key_same_content_same_key(tmp_path):
     a = tmp_path / "a.bin"
     b = tmp_path / "b.bin"
     a.write_bytes(b"hello world" * 1000)
     b.write_bytes(b"hello world" * 1000)
-    assert cache.compute_key(a) == cache.compute_key(b)
+    assert cache.compute_key(a, _stt()) == cache.compute_key(b, _stt())
 
 
 def test_compute_key_different_content_different_key(tmp_path):
@@ -30,12 +36,26 @@ def test_compute_key_different_content_different_key(tmp_path):
     b = tmp_path / "b.bin"
     a.write_bytes(b"hello")
     b.write_bytes(b"world")
-    assert cache.compute_key(a) != cache.compute_key(b)
+    assert cache.compute_key(a, _stt()) != cache.compute_key(b, _stt())
+
+
+def test_compute_key_different_model_different_key(tmp_path):
+    # 같은 오디오라도 모델이 다르면 키가 달라야 한다(옛 모델 전사 재사용 방지).
+    a = tmp_path / "a.bin"
+    a.write_bytes(b"hello world" * 1000)
+    assert cache.compute_key(a, _stt(model_path="base.bin")) != cache.compute_key(a, _stt(model_path="large.bin"))
+
+
+def test_compute_key_different_language_different_key(tmp_path):
+    # 같은 오디오라도 언어가 다르면 키가 달라야 한다.
+    a = tmp_path / "a.bin"
+    a.write_bytes(b"hello world" * 1000)
+    assert cache.compute_key(a, _stt(language="ko")) != cache.compute_key(a, _stt(language="en"))
 
 
 def test_compute_key_missing_file_raises(tmp_path):
     with pytest.raises(CacheError):
-        cache.compute_key(tmp_path / "nope.bin")
+        cache.compute_key(tmp_path / "nope.bin", _stt())
 
 
 def _segments():

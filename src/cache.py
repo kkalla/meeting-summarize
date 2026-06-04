@@ -15,9 +15,13 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.exceptions import CacheError
 from src.transcribe import Segment
+
+if TYPE_CHECKING:
+    from src.config import SttConfig
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +31,23 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 _SUFFIX = ".json"
 
 
-def compute_key(audio_path: Path) -> str:
-    """원본 오디오 내용의 SHA-256 hex 를 반환한다.
+def _stt_fingerprint(stt: SttConfig) -> str:
+    """전사 출력을 좌우하는 STT 설정의 짧은 지문(hex 16자)을 반환한다.
+
+    같은 오디오라도 모델/언어가 다르면 전사 결과가 달라지므로, 이 지문을 캐시 키에
+    섞어 설정 변경 시 옛 전사가 잘못 재사용되는 것을 막는다. ETA 표시 전용인
+    ``rtf_estimate`` 나 ``timeout_sec`` 처럼 출력에 영향 없는 필드는 제외한다.
+    """
+    fingerprint = {"model_path": stt.model_path, "language": stt.language}
+    encoded = json.dumps(fingerprint, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def compute_key(audio_path: Path, stt: SttConfig) -> str:
+    """``<오디오 SHA-256>-<STT 설정 지문>`` 형태의 캐시 키를 반환한다.
+
+    오디오 내용뿐 아니라 전사에 쓰인 모델/언어까지 키에 반영해, 모델·언어를 바꾸면
+    같은 오디오라도 캐시가 미스되어 새 설정으로 다시 전사된다.
 
     Raises:
         CacheError: 파일을 읽을 수 없을 때(캐시 비활성과 동일하게 전사로 폴백시킨다).
@@ -40,7 +59,7 @@ def compute_key(audio_path: Path) -> str:
                 digest.update(block)
     except OSError as exc:
         raise CacheError(f"캐시 키 계산용 파일을 읽을 수 없습니다: {audio_path} ({exc})") from exc
-    return digest.hexdigest()
+    return f"{digest.hexdigest()}-{_stt_fingerprint(stt)}"
 
 
 def _cache_path(cache_dir: Path, key: str) -> Path:

@@ -27,7 +27,7 @@ class _Cfg:
 
 def test_cache_hit_skips_transcribe(monkeypatch, tmp_path):
     cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=True))
-    monkeypatch.setattr(pipeline.cache, "compute_key", lambda p: "key1")
+    monkeypatch.setattr(pipeline.cache, "compute_key", lambda p, stt: "key1")
     monkeypatch.setattr(pipeline.cache, "load", lambda d, k: _seg())
     called = {"transcribe": False}
 
@@ -44,7 +44,7 @@ def test_cache_hit_skips_transcribe(monkeypatch, tmp_path):
 
 def test_cache_miss_transcribes_and_stores(monkeypatch, tmp_path):
     cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=True))
-    monkeypatch.setattr(pipeline.cache, "compute_key", lambda p: "key1")
+    monkeypatch.setattr(pipeline.cache, "compute_key", lambda p, stt: "key1")
     monkeypatch.setattr(pipeline.cache, "load", lambda d, k: None)
     monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt: _seg())
     stored = {}
@@ -64,7 +64,7 @@ def test_cache_miss_transcribes_and_stores(monkeypatch, tmp_path):
 def test_cache_disabled_always_transcribes(monkeypatch, tmp_path):
     cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=False))
 
-    def _no_key(p):
+    def _no_key(p, stt):
         raise AssertionError("disabled 인데 compute_key 가 호출됨")
 
     monkeypatch.setattr(pipeline.cache, "compute_key", _no_key)
@@ -79,7 +79,7 @@ def test_compute_key_failure_falls_back_to_transcribe(monkeypatch, tmp_path):
 
     cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=True))
 
-    def _raise(p):
+    def _raise(p, stt):
         raise CacheError("못 읽음")
 
     monkeypatch.setattr(pipeline.cache, "compute_key", _raise)

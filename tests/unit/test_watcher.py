@@ -338,3 +338,16 @@ def test_purge_cache_skipped_when_disabled(tmp_path, monkeypatch):
 
     monkeypatch.setattr("src.watcher.purge_expired", _fail)
     watcher._purge_cache()
+
+
+def test_purge_cache_throttled_within_interval(tmp_path, monkeypatch):
+    # TTL 이 시간 단위라 정리는 인터벌마다 한 번만 — 스캔(초 단위)마다 돌면 안 된다.
+    watcher = _make_watcher(tmp_path, cache_enabled=True)
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        "src.watcher.purge_expired",
+        lambda d, ttl: calls.__setitem__("n", calls["n"] + 1) or 0,
+    )
+    watcher._purge_cache()  # 첫 호출 — 정리한다
+    watcher._purge_cache()  # 인터벌 내 재호출 — 스킵한다
+    assert calls["n"] == 1
