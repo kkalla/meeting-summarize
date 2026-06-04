@@ -57,8 +57,9 @@ summarize:
   backoff_base: 2
   # 단일 LLM 요청 타임아웃(초).
   request_timeout_sec: 120
-  # 생성 토큰 상한.
-  max_tokens: 2048
+  # 생성 토큰 상한. reasoning 모델은 사고과정(<think>)도 이 예산을 쓰므로 넉넉히 둔다.
+  # 너무 작으면 사고하다 본문이 잘려(finish_reason=length) 사고과정만 저장되는 사고가 난다.
+  max_tokens: 8192
   temperature: 0.3
   # Map 단계 허용 누락률(%). 0 이면 청크 하나라도 실패 시 전체 실패.
   max_chunk_failure_pct: 0

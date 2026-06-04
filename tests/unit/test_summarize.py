@@ -39,7 +39,9 @@ class FakeClient:
     def _create(self, **kwargs):
         self.calls.append(kwargs)
         content = self._handler(kwargs)  # 예외를 던질 수 있음
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")]
+        )
 
 
 def _chunk(index: int, text: str) -> Chunk:
@@ -190,6 +192,55 @@ def test_map_partial_failure_within_threshold_marks_missing_and_proceeds():
     reduce_call = client.calls[-1]["messages"][0]["content"]
     assert "누락" in reduce_call  # 실패 구간이 Reduce 입력에 명시됨
     assert result == "부분요약"
+
+
+def test_truncated_length_finish_reason_falls_back_to_next_model():
+    # reasoning 모델이 사고과정에서 max_tokens 를 소진해 본문이 잘린 경우(finish_reason="length").
+    # 잘린 사고과정을 요약으로 저장하면 안 되므로 실패로 보고 다음 모델로 폴백해야 한다.
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if kwargs["model"] == "m1":
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="We need to produce final summary in Korean..."),
+                        finish_reason="length",
+                    )
+                ]
+            )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="## 핵심 요약\n- ok"), finish_reason="stop")]
+        )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2"), "max_retries": 1})
+
+    assert "핵심 요약" in result
+    assert [c["model"] for c in calls][-1] == "m2"  # 잘린 m1 버리고 m2 로 폴백
+
+
+def test_reasoning_exclude_passed_in_extra_body():
+    # reasoning 모델의 사고과정이 본문/토큰예산을 잠식하지 않도록 OpenRouter reasoning 제어를 전달한다.
+    client = FakeClient(lambda _: "## 핵심 요약\n- ok")
+
+    _summarize([_chunk(0, "회의")], client)
+
+    extra_body = client.calls[0].get("extra_body", {})
+    assert extra_body.get("reasoning", {}).get("exclude") is True
+
+
+def test_inline_think_block_is_stripped_from_content():
+    # 일부 free provider 는 exclude 를 무시하고 content 에 <think> 를 인라인으로 남긴다 — 방어적으로 제거.
+    client = FakeClient(lambda _: "<think>영어로 주절주절 사고과정</think>\n## 핵심 요약\n- ok")
+
+    result = _summarize([_chunk(0, "회의")], client)
+
+    assert "<think>" not in result
+    assert "사고과정" not in result
+    assert result.startswith("## 핵심 요약")
 
 
 def test_content_none_is_distinguished_and_falls_back_to_next_model():

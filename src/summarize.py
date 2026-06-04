@@ -7,6 +7,7 @@ Map 을 생략하고 single-shot 으로 요약한다. Map 일부 실패는 누�
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 
@@ -26,6 +27,16 @@ from src.exceptions import SummarizationError
 logger = logging.getLogger(__name__)
 
 PCT_FULL = 100.0
+
+# 일부 reasoning 모델은 OpenRouter reasoning.exclude 를 무시하고 content 에 사고과정을
+# <think>...</think> 로 인라인으로 남긴다. 본문에서 방어적으로 제거한다.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_reasoning(text: str) -> str:
+    """content 에 인라인으로 남은 ``<think>...</think>`` 블록을 제거한다."""
+    return _THINK_BLOCK.sub("", text).strip()
+
 
 # 키/권한 문제 — 어떤 모델로 바꿔도 동일하게 실패하므로 즉시 중단한다.
 _FATAL_ERRORS = (AuthenticationError, PermissionDeniedError)
@@ -183,6 +194,9 @@ def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: Open
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         timeout=config.request_timeout_sec,
+        # reasoning 모델이 사고과정(<think>)으로 토큰을 소진해 본문을 못 내는 것을 막는다.
+        # effort=low 로 사고량을 줄이고, exclude=true 로 사고 텍스트를 응답에서 분리한다(OpenRouter 확장).
+        extra_body={"reasoning": {"effort": "low", "exclude": True}},
     )
     if not resp.choices:
         raise SummarizationError(f"{model} 응답에 choices 가 없습니다(콘텐츠 필터/쿼터 가능).")
@@ -195,4 +209,12 @@ def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: Open
             f"{model} 이 본문 없이 응답했습니다(content=None, finish_reason={choice.finish_reason}). "
             "콘텐츠 필터 또는 비정상 종료 가능."
         )
-    return content
+    # 사고과정이 max_tokens 를 소진해 본문이 잘린 경우. 잘린 사고과정을 요약으로 저장하면 안 되므로
+    # 실패로 보고 재시도/폴백을 유도한다(reasoning 모델에서 흔함).
+    if getattr(choice, "finish_reason", None) == "length":
+        raise SummarizationError(
+            f"{model} 응답이 max_tokens({config.max_tokens})에서 잘렸습니다"
+            "(reasoning 모델이 사고과정에서 토큰을 소진했을 가능성). "
+            "configs/pipeline.yaml 의 summarize.max_tokens 를 늘리거나 비-reasoning 모델을 쓰세요."
+        )
+    return _strip_reasoning(content)
