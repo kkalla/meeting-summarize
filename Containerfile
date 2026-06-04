@@ -13,7 +13,9 @@ WORKDIR /app
 # 2) whisper.cpp 클론 + CPU 빌드(whisper-cli). 빌드 경로를 호스트 config 의
 #    stt.whisper_cli (vendor/whisper.cpp/build/bin/whisper-cli) 와 동일하게 맞춰
 #    configs/pipeline.yaml 수정 없이 동작하게 한다.
-RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git vendor/whisper.cpp \
+#    재현 가능한 빌드를 위해 안정 태그에 고정한다(upstream HEAD 자동 유입 방지).
+ARG WHISPER_CPP_TAG=v1.7.4
+RUN git clone --depth 1 --branch "${WHISPER_CPP_TAG}" https://github.com/ggml-org/whisper.cpp.git vendor/whisper.cpp \
     && cmake -B vendor/whisper.cpp/build -S vendor/whisper.cpp \
         -DGGML_METAL=OFF -DWHISPER_BUILD_TESTS=OFF \
     && cmake --build vendor/whisper.cpp/build --config Release -j --target whisper-cli

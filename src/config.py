@@ -148,6 +148,16 @@ class WatcherConfig:
     stability_checks: int
     extensions: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        # 다른 config dataclass 와 동일하게 불변식을 타입이 소유한다. 직접 생성(테스트·
+        # 미래 호출자)에서도 무효 상태(busy-spin/무동작)가 통과하지 않도록 한다.
+        if self.poll_interval_sec < 1:
+            raise DependencyError("watcher.poll_interval_sec 는 1 이상이어야 합니다(busy-spin 방지).")
+        if self.stability_checks < 1:
+            raise DependencyError("watcher.stability_checks 는 1 이상이어야 합니다.")
+        if not self.extensions:
+            raise DependencyError("watcher.extensions 가 비어 있습니다 — 처리할 확장자를 하나 이상 지정하세요.")
+
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -257,27 +267,17 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
 
 
 def _build_watcher_config(watch_raw: dict) -> WatcherConfig:
-    """watcher 설정을 경계값 검증과 함께 빌드한다.
+    """watcher 설정 dict 를 :class:`WatcherConfig` 로 변환한다.
 
-    Raises:
-        DependencyError: 폴링 주기·안정화 횟수가 1 미만이거나 확장자 목록이 비었을 때.
-            (오설정 시 busy-spin 이나 무동작으로 빠지지 않도록 시작 시점에 빠르게 실패한다.)
+    경계값 검증은 :meth:`WatcherConfig.__post_init__` 가 소유한다(다른 config 와 일관).
+    이 함수는 dict→타입 변환과 경로 해석만 담당한다.
     """
-    poll_interval_sec = int(watch_raw["poll_interval_sec"])
-    stability_checks = int(watch_raw["stability_checks"])
-    extensions = tuple(str(ext).lower() for ext in watch_raw["extensions"])
-    if poll_interval_sec < 1:
-        raise DependencyError("watcher.poll_interval_sec 는 1 이상이어야 합니다(busy-spin 방지).")
-    if stability_checks < 1:
-        raise DependencyError("watcher.stability_checks 는 1 이상이어야 합니다.")
-    if not extensions:
-        raise DependencyError("watcher.extensions 가 비어 있습니다 — 처리할 확장자를 하나 이상 지정하세요.")
     return WatcherConfig(
         inbox_dir=_resolve_dir(str(watch_raw["inbox_dir"])),
         processed_dir=_resolve_dir(str(watch_raw["processed_dir"])),
         failed_dir=_resolve_dir(str(watch_raw["failed_dir"])),
         output_dir=_resolve_dir(str(watch_raw["output_dir"])),
-        poll_interval_sec=poll_interval_sec,
-        stability_checks=stability_checks,
-        extensions=extensions,
+        poll_interval_sec=int(watch_raw["poll_interval_sec"]),
+        stability_checks=int(watch_raw["stability_checks"]),
+        extensions=tuple(str(ext).lower() for ext in watch_raw["extensions"]),
     )

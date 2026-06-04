@@ -57,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     except DependencyError as exc:
         log.error("설정 로드 실패: %s", exc)
         return 1
+    except Exception:  # noqa: BLE001 - YAMLError 등 비-DependencyError 도 raw traceback 없이 종료
+        # 설정 파싱 실패가 그대로 죽으면 restart: unless-stopped 가 즉시 재시작을 반복한다.
+        log.exception("설정 로드 중 예상치 못한 오류")
+        return 1
 
     watcher = FolderWatcher(config, args.config)
 
@@ -67,7 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    watcher.run()
+    try:
+        watcher.run()
+    except Exception:  # noqa: BLE001 - _ensure_dirs mkdir(볼륨 권한) 등 시작 실패를 깔끔히 종료
+        # 그대로 전파시키면 컨테이너가 비정상 종료 → restart 정책상 무한 재시작한다.
+        log.exception("watcher 실행 중 치명적 오류")
+        return 1
     return 0
 
 

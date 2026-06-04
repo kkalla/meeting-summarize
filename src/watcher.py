@@ -7,6 +7,7 @@ podman 컨테이너 안에서 데몬으로 동작한다. 새 파일이 업로드
 
 from __future__ import annotations
 
+import errno
 import logging
 import shutil
 import time
@@ -43,6 +44,8 @@ class FolderWatcher:
         # 파일별 직전 (size, mtime) 스냅샷과 연속 동일 횟수.
         self._snapshots: dict[Path, tuple[int, float]] = {}
         self._stable_counts: dict[Path, int] = {}
+        # 이동이 영구 실패(읽기전용/권한/디스크풀)해 inbox 에 남은 파일. 재처리를 막는다.
+        self._quarantined: set[Path] = set()
         self._stop = False
 
     def request_stop(self) -> None:
@@ -101,6 +104,9 @@ class FolderWatcher:
             if path.suffix.lower() not in exts:
                 logger.debug("대상 아닌 확장자, 무시: %s", path.name)
                 continue
+            if path in self._quarantined:
+                # 이동 영구 실패로 격리된 파일 — 운영자가 치울 때까지 재처리하지 않는다.
+                continue
             candidates.append(path)
         return sorted(candidates)
 
@@ -110,6 +116,9 @@ class FolderWatcher:
         for tracked in [p for p in self._snapshots if p not in present]:
             self._snapshots.pop(tracked, None)
             self._stable_counts.pop(tracked, None)
+        # 격리 파일이 inbox 에서 치워졌으면 격리 목록에서도 잊는다(메모리 누수 방지).
+        for gone in [p for p in self._quarantined if p not in present]:
+            self._quarantined.discard(gone)
 
     def _is_stable(self, path: Path) -> bool:
         """``(size, mtime)`` 가 연속 ``stability_checks`` 회 동일한지 판정한다.
@@ -139,20 +148,47 @@ class FolderWatcher:
         except (PipelineError, FileNotFoundError) as exc:
             # 예상된 도메인 실패(전사/요약/입력 누락). 파일만 failed 로 옮기고 계속 진행.
             logger.error("처리 실패: %s (%s)", path.name, exc)
-            dest = self._move(path, self._wcfg.failed_dir)
-            logger.info("실패 파일 이동: %s -> %s", path.name, dest)
+            self._relocate(path, self._wcfg.failed_dir, "실패")
         except Exception:  # noqa: BLE001 - 데몬 생존이 우선: 어떤 파일도 루프를 죽이면 안 됨
             # 예상치 못한 예외(SDK 오류 등)도 삼키지 말고 traceback 을 남긴 뒤 failed 로.
             # 그대로 전파시키면 스캔 루프가 죽고 restart 정책상 같은 파일을 무한 재시도한다.
             logger.exception("예상치 못한 오류로 처리 실패: %s", path.name)
-            dest = self._move(path, self._wcfg.failed_dir)
-            logger.info("실패 파일 이동: %s -> %s", path.name, dest)
+            self._relocate(path, self._wcfg.failed_dir, "실패")
         else:
-            dest = self._move(path, self._wcfg.processed_dir)
-            logger.info("처리 완료: %s -> %s (리포트: %s)", path.name, dest, output_path)
+            # run_pipeline 이 조용히 빈/누락 리포트를 남겼을 수 있으므로 산출물을 검증한다.
+            # 검증 없이 processed 로 옮기면 원본이 inbox 에서 사라져 복구·재처리가 불가능하다.
+            if self._output_ok(output_path):
+                self._relocate(path, self._wcfg.processed_dir, "완료", report=output_path)
+            else:
+                logger.error("출력 리포트가 없거나 비어 있음: %s — failed 로 격리", output_path)
+                self._relocate(path, self._wcfg.failed_dir, "실패(빈 출력)")
         finally:
             self._snapshots.pop(path, None)
             self._stable_counts.pop(path, None)
+
+    def _output_ok(self, output_path: Path) -> bool:
+        """파이프라인 산출물이 실제로 생성됐고 비어 있지 않은지 검사한다."""
+        try:
+            return output_path.is_file() and output_path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def _relocate(self, path: Path, dest_dir: Path, label: str, *, report: Path | None = None) -> None:
+        """파일을 옮기고 결과를 로깅한다. 이동이 영구 실패하면 격리한다.
+
+        이동이 OSError 로 실패하면(읽기전용 마운트/권한/디스크풀) 파일은 inbox 에 남는다.
+        이때 격리하지 않으면 다음 스캔에서 다시 추적·재처리되어 STT+요약을 무한 반복한다.
+        """
+        try:
+            dest = self._move(path, dest_dir)
+        except OSError as exc:
+            self._quarantined.add(path)
+            logger.error("파일 이동 실패 — 격리(재처리 안 함): %s -> %s (%s)", path.name, dest_dir, exc)
+            return
+        if report is not None:
+            logger.info("처리 완료: %s -> %s (리포트: %s)", path.name, dest, report)
+        else:
+            logger.info("%s 파일 이동: %s -> %s", label, path.name, dest)
 
     def _move(self, path: Path, dest_dir: Path) -> Path:
         """``path`` 를 ``dest_dir`` 로 옮긴다. 이름 충돌 시 타임스탬프 suffix 를 붙인다.
@@ -163,17 +199,23 @@ class FolderWatcher:
 
         Returns:
             실제로 옮겨진 최종 경로.
+
+        Raises:
+            OSError: 이동이 실패할 때(교차 파일시스템 외 사유는 그대로 전파).
         """
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / path.name
         if dest.exists():
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             dest = dest_dir / f"{path.stem}_{timestamp}{path.suffix}"
-        # shutil 대신 Path.replace 로 같은 파일시스템 내 원자적 이동을 시도하고,
-        # 교차 파일시스템(볼륨 마운트 경계)이면 복사 후 삭제로 폴백한다.
+        # Path.replace 로 같은 파일시스템 내 원자적 이동을 시도하고, 교차 파일시스템
+        # (볼륨 마운트 경계, EXDEV)일 때만 복사+삭제로 폴백한다. 그 외 OSError
+        # (ENOSPC/EPERM/EROFS 등)는 원인이 로그에 남도록 그대로 전파한다.
         try:
             path.replace(dest)
-        except OSError:
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
             shutil.move(str(path), str(dest))
         return dest
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,12 @@ import pytest
 from src.config import WatcherConfig, _build_watcher_config
 from src.exceptions import DependencyError, PipelineError
 from src.watcher import FolderWatcher
+
+
+def _write_report(inp: Path, out: Path, cfg: object) -> None:
+    """실제 run_pipeline 처럼 비어있지 않은 리포트를 남기는 테스트 더블."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("# 회의 요약\n", encoding="utf-8")
 
 
 def _wcfg(tmp_path: Path, stability_checks: int = 2) -> WatcherConfig:
@@ -49,7 +56,14 @@ def test_is_stable_returns_true_after_consecutive_identical_observations(watcher
 def test_stable_file_is_processed_and_moved_to_processed(watcher, monkeypatch):
     # Arrange
     calls: list[tuple] = []
-    monkeypatch.setattr("src.watcher.run_pipeline", lambda inp, out, cfg: calls.append((inp, out, cfg)))
+
+    def _fake_pipeline(inp, out, cfg):
+        # 실제 run_pipeline 처럼 리포트를 생성한다(watcher 가 산출물 존재를 검증하므로 필수).
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("# 회의 요약\n", encoding="utf-8")
+        calls.append((inp, out, cfg))
+
+    monkeypatch.setattr("src.watcher.run_pipeline", _fake_pipeline)
     audio = _touch(watcher._wcfg.inbox_dir / "meeting.m4a")
 
     # Act: 첫 스캔은 안정화 미완(skip), 둘째 스캔에서 처리
@@ -197,3 +211,81 @@ def test_build_watcher_config_rejects_non_positive_stability_checks():
 def test_build_watcher_config_rejects_empty_extensions():
     with pytest.raises(DependencyError):
         _build_watcher_config(_watch_raw(extensions=[]))
+
+
+def test_empty_output_moves_file_to_failed(watcher, monkeypatch):
+    # run_pipeline 이 예외 없이 반환했지만 리포트를 만들지 못한 경우 → processed 가 아닌 failed.
+    monkeypatch.setattr("src.watcher.run_pipeline", lambda inp, out, cfg: None)
+    audio = _touch(watcher._wcfg.inbox_dir / "silent.m4a")
+
+    watcher._scan_once()
+    watcher._scan_once()
+
+    assert not audio.exists()
+    assert (watcher._wcfg.failed_dir / "silent.m4a").exists()
+    assert not (watcher._wcfg.processed_dir / "silent.m4a").exists()
+
+
+def test_permanent_move_failure_quarantines_and_stops_reprocessing(watcher, monkeypatch):
+    pipeline_calls: list[Path] = []
+
+    def _fake_pipeline(inp, out, cfg):
+        _write_report(inp, out, cfg)
+        pipeline_calls.append(inp)
+
+    def _raise_rofs(path, dest_dir):
+        raise OSError(errno.EROFS, "read-only file system")
+
+    monkeypatch.setattr("src.watcher.run_pipeline", _fake_pipeline)
+    monkeypatch.setattr(watcher, "_move", _raise_rofs)
+    audio = _touch(watcher._wcfg.inbox_dir / "stuck.m4a")
+
+    # 안정화 후 처리 → 이동 영구 실패 → 격리
+    watcher._scan_once()
+    watcher._scan_once()
+    assert audio.exists()  # 이동 실패로 inbox 에 남음
+    assert audio in watcher._quarantined
+
+    # 격리된 파일은 이후 스캔에서 재처리되지 않는다(STT+요약 무한 반복 차단).
+    watcher._scan_once()
+    watcher._scan_once()
+    assert len(pipeline_calls) == 1
+
+
+def test_move_falls_back_to_shutil_on_exdev(watcher, monkeypatch):
+    src = _touch(watcher._wcfg.inbox_dir / "x.m4a")
+
+    def _raise_exdev(self, target):
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(Path, "replace", _raise_exdev)
+    dest = watcher._move(src, watcher._wcfg.processed_dir)
+
+    assert dest.exists() and not src.exists()  # shutil.move 폴백 성공
+
+
+def test_move_reraises_non_exdev_oserror(watcher, monkeypatch):
+    src = _touch(watcher._wcfg.inbox_dir / "y.m4a")
+
+    def _raise_eperm(self, target):
+        raise OSError(errno.EPERM, "operation not permitted")
+
+    monkeypatch.setattr(Path, "replace", _raise_eperm)
+
+    with pytest.raises(OSError) as exc_info:
+        watcher._move(src, watcher._wcfg.processed_dir)
+    assert exc_info.value.errno == errno.EPERM  # 원인이 가려지지 않고 그대로 전파
+
+
+def test_watcher_config_post_init_validates_on_direct_construction(tmp_path):
+    # _build_watcher_config 를 거치지 않는 직접 생성도 불변식을 강제한다.
+    with pytest.raises(DependencyError):
+        WatcherConfig(
+            inbox_dir=tmp_path,
+            processed_dir=tmp_path,
+            failed_dir=tmp_path,
+            output_dir=tmp_path,
+            poll_interval_sec=0,
+            stability_checks=2,
+            extensions=(".m4a",),
+        )

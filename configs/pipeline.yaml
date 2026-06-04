@@ -69,7 +69,8 @@ watcher:
   # 폴링 주기(초). 이 간격마다 inbox 를 스캔한다.
   poll_interval_sec: 10
   # 업로드 완료 판정: (size, mtime) 가 연속 이 횟수만큼 동일하면 "안정"으로 보고 처리.
-  # 폴링 한 바퀴가 곧 체크 간격이므로, 안정 확정까지 최소 (stability_checks * poll_interval_sec) 초 걸림.
+  # 첫 관측은 스냅샷만 잡으므로, 안정 확정까지 최소 ((stability_checks - 1) * poll_interval_sec) 초 걸림
+  # (기본 2회·10초면 약 10초).
   stability_checks: 2
   # 처리 대상 확장자(소문자, 점 포함). 그 외 파일은 무시.
   extensions:
