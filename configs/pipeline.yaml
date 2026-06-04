@@ -46,6 +46,8 @@ chunking:
 summarize:
   # OpenRouter 폴백 체인. 위에서부터 순서대로 시도.
   # 주의: 전부 :free 면 공용 쿼터라 상관 장애 위험(Ask First 대상).
+  # 주의: 모든 모델에 reasoning 힌트(extra_body)가 전달된다. 비-reasoning 모델을 추가할 때
+  #       해당 provider 가 unknown 파라미터를 거부(400)하면 멀쩡한 모델이 스킵될 수 있다.
   models:
     - "nvidia/nemotron-3-super-120b-a12b:free"
     - "google/gemma-4-31b-it:free"
@@ -57,8 +59,9 @@ summarize:
   backoff_base: 2
   # 단일 LLM 요청 타임아웃(초).
   request_timeout_sec: 120
-  # 생성 토큰 상한.
-  max_tokens: 2048
+  # 생성 토큰 상한. reasoning 모델은 사고과정(<think>)도 이 예산을 쓰므로 넉넉히 둔다.
+  # 너무 작으면 사고하다 본문이 잘려(finish_reason=length) 사고과정만 저장되는 사고가 난다.
+  max_tokens: 8192
   temperature: 0.3
   # Map 단계 허용 누락률(%). 0 이면 청크 하나라도 실패 시 전체 실패.
   max_chunk_failure_pct: 0
