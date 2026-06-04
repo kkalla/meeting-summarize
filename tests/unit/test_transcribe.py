@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,6 +47,39 @@ def test_run_whisper_wraps_oserror_as_transcription_error(tmp_path, monkeypatch)
     # Act / Assert: 원시 OSError 가 아니라 TranscriptionError 로 변환되어야 한다
     with pytest.raises(TranscriptionError):
         _run_whisper(tmp_path / "a.wav", tmp_path / "out", config)
+
+
+def test_run_whisper_tolerates_non_utf8_bytes_in_token_text(tmp_path, monkeypatch):
+    # whisper.cpp -ojf 가 한글 토큰을 UTF-8 경계 중간에서 잘라 invalid byte 를 낸 상황 재현.
+    # text 는 "안녕"(완전), token text 에는 잘린 "\xeb" 가 섞여 있다.
+    prefix = tmp_path / "out"
+    raw = (
+        b'{"transcription": [{"offsets": {"from": 0, "to": 1000}, '
+        b'"text": "\xec\x95\x88\xeb\x85\x95", "tokens": [{"p": 0.9, "text": "\xec\x95\x88\xeb"}]}]}'
+    )
+    prefix.with_suffix(".json").write_bytes(raw)
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+    config = SttConfig(
+        whisper_cli="/fake/whisper-cli",
+        model_path="/fake/model.bin",
+        language="ko",
+        timeout_sec=10,
+        confidence_gate=_gate(),
+        completeness_tolerance_sec=5.0,
+    )
+
+    # Act: invalid byte 가 있어도 파싱이 깨지지 않아야 한다
+    data = _run_whisper(tmp_path / "a.wav", prefix, config)
+
+    # Assert: 세그먼트 text(완전한 문장)와 토큰 확률은 온전하게 살아남는다
+    segments = parse_segments(data)
+    assert len(segments) == 1
+    assert segments[0].text == "안녕"
+    assert segments[0].avg_logprob is not None
 
 
 # --- parse_segments -------------------------------------------------------
