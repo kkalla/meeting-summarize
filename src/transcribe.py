@@ -211,7 +211,11 @@ def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig) -> dict:
         raise TranscriptionError(f"whisper-cli 가 JSON 출력을 만들지 못했습니다: {json_path}")
 
     try:
-        with json_path.open("r", encoding="utf-8") as fp:
+        # whisper.cpp 의 -ojf full JSON 은 토큰 텍스트를 내보내는데, 한글(UTF-8 3바이트)이
+        # subword/byte 토큰으로 쪼개지면 토큰 텍스트가 문자 경계 중간에서 잘려 invalid UTF-8
+        # 바이트가 섞인다. 이 토큰 텍스트는 아무도 쓰지 않으므로(세그먼트 text 와 tokens[].p
+        # 만 사용), errors="replace" 로 깨진 바이트만 치환하고 파싱을 계속한다.
+        with json_path.open("r", encoding="utf-8", errors="replace") as fp:
             return json.load(fp)
     except json.JSONDecodeError as exc:
         raise TranscriptionError(f"전사 JSON 파싱 실패(잘린 출력 가능): {exc}") from exc
