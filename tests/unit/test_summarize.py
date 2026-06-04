@@ -269,16 +269,37 @@ def test_unclosed_think_with_trailing_body_drops_body_and_falls_back():
     assert [c["model"] for c in client.calls][-1] == "m2"
 
 
-def test_nested_think_does_not_leak_residual_reasoning_or_orphan_close():
+def test_nested_think_leak_falls_back_without_leaking_residual():
     # 중첩 <think> 는 비탐욕 매칭이 안쪽 </think> 에서 멈춰, 바깥 </think> 와 그 앞의 잔여
-    # 사고과정("잔여사고")이 고아로 남는다. 고아 닫는 태그뿐 아니라 잔여 사고과정도 새면 안 된다.
-    client = FakeClient(lambda _: "<think>외부<think>내부</think>잔여사고</think>\n## 핵심 요약\n- ok")
+    # 사고과정("잔여사고")이 고아로 남는다. 잔여 사고과정과 본문 경계를 못 가르므로 섣불리
+    # 본문을 살리지 않고(=유실 위험) 누출로 보고 다음 모델로 폴백한다.
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            return "<think>외부<think>내부</think>잔여사고</think>\n## 핵심 요약\n- 버려질 본문"
+        return "## 핵심 요약\n- ok"
 
-    result = _summarize([_chunk(0, "회의")], client)
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2")})
 
     assert "</think>" not in result
-    assert "잔여사고" not in result  # 고아 </think> 앞의 잔여 사고과정도 제거됨
-    assert result == "## 핵심 요약\n- ok"
+    assert "잔여사고" not in result  # 잔여 사고과정이 요약으로 새지 않음
+    assert result == "## 핵심 요약\n- ok"  # m1 본문은 살리지 않고 m2 로 폴백
+    assert [c["model"] for c in client.calls][-1] == "m2"
+
+
+def test_body_containing_literal_close_tag_is_not_silently_truncated():
+    # 회귀 방지: 본문이 </think> 문자열을 포함해도(예: LLM 태그를 논의하는 회의) 그 앞부분이
+    # 조용히 잘려나가면 안 된다. 고아 </think> 는 누출 신호로 보고 폴백 → 다음 모델이 깨끗한 요약.
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            return "## 핵심 요약\n- 모델이 </think> 태그를 흘리는 버그 논의"
+        return "## 핵심 요약\n- 깨끗한 요약"
+
+    client = FakeClient(handler)
+    result = _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1", "m2")})
+
+    assert result == "## 핵심 요약\n- 깨끗한 요약"  # 본문 일부만 잘린 결과가 저장되지 않음
+    assert [c["model"] for c in client.calls][-1] == "m2"
 
 
 def test_think_only_content_skips_retry_and_falls_back():
@@ -306,6 +327,17 @@ def test_think_only_on_all_models_raises_reasoning_leak_error():
         _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1",), "max_retries": 2})
 
     # 단일 모델·결정적 누출 → 재시도 없이 단 한 번만 호출.
+    assert len(client.calls) == 1
+
+
+def test_truncation_on_all_models_raises_summarization_error():
+    # 모든 모델이 잘림(finish_reason="length")이면 TruncatedResponseError(SummarizationError) 로 실패.
+    client = FakeClient(lambda _: ("사고과정만 하다 잘림", "length"))
+
+    with pytest.raises(SummarizationError):
+        _summarize([_chunk(0, "회의")], client, config_kwargs={"models": ("m1",), "max_retries": 3})
+
+    # 단일 모델·결정적 잘림 → 재시도 없이 단 한 번만 호출.
     assert len(client.calls) == 1
 
 

@@ -42,12 +42,9 @@ _FINISH_REASON_LENGTH = "length"
 # 닫지 않은 채 본문을 이어붙이면 그 본문도 함께 사라진다(→ 빈 결과 → ReasoningLeakError 폴백).
 # 이는 의도된 트레이드오프다: 복구 불가능한 누출을 조용히 새게 두느니 시끄럽게 폴백시킨다.
 _THINK_BLOCK = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL | re.IGNORECASE)
-# 중첩 <think> 는 비탐욕 매칭이 안쪽 </think> 에서 멈춰, 바깥 </think> 와 그 앞의 잔여
-# 사고과정(예: `</think>잔여사고</think>`)이 고아로 남는다. 고아 </think> 가 보인다는 건
-# 닫히지 않은 중첩 누출의 흔적이므로, 문자열 시작부터 마지막 고아 </think> 까지(포함) 전부
-# 사고과정으로 간주해 잘라낸다. `.*` 는 DOTALL 로 줄바꿈을 가로지르고, 탐욕 매칭이라 마지막
-# </think> 까지 한 번에 먹는다.
-_ORPHAN_THINK_PREFIX = re.compile(r".*</think>", re.DOTALL | re.IGNORECASE)
+# 블록 제거 후에도 남는 고아 </think>. 중첩 <think> 가 안쪽 </think> 에서 끊겨 바깥 </think>
+# 가 남거나, provider 가 여는 태그 없이 닫는 태그만 흘린 비정상 누출의 흔적이다.
+_ORPHAN_THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
 
 
 def _strip_reasoning(text: str) -> str:
@@ -55,10 +52,15 @@ def _strip_reasoning(text: str) -> str:
 
     닫는 태그가 없는 누출(<think> 가 열린 뒤 닫히지 않음)은 사고과정 뒤에 본문이
     이어지더라도 문자열 끝까지 전부 제거한다 — 사고/본문 경계 신호가 없기 때문이다.
-    중첩으로 남은 고아 ``</think>`` 와 그 앞의 잔여 사고과정도 함께 제거한다.
+
+    블록을 제거하고도 고아 ``</think>`` 가 남으면 중첩 등 비정상 누출 신호다. 잔여 사고과정과
+    본문의 경계를 신뢰성 있게 가를 수 없으므로(섣불리 자르면 멀쩡한 본문이 유실된다) 빈 문자열을
+    반환해 호출부가 누출로 보고 다음 모델로 폴백하게 한다 — 조용히 새거나 잘리느니 시끄럽게 폴백.
     """
     without_blocks = _THINK_BLOCK.sub("", text)
-    return _ORPHAN_THINK_PREFIX.sub("", without_blocks).strip()
+    if _ORPHAN_THINK_CLOSE.search(without_blocks):
+        return ""
+    return without_blocks.strip()
 
 
 # 키/권한 문제 — 어떤 모델로 바꿔도 동일하게 실패하므로 즉시 중단한다.
@@ -254,14 +256,15 @@ def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: Open
         )
     stripped = _strip_reasoning(content)
     if not stripped:
-        # content 에 <think> 가 있었으면 provider 가 exclude 를 무시하고 사고과정만 보낸 누출이다.
-        # 같은 모델로 재시도해도 결정적으로 동일하므로 재시도 없이 다음 모델로 폴백한다.
-        if "<think>" in content.lower():
+        # content 에 <think> 또는 </think> 흔적이 있었으면 reasoning 누출이다(exclude 무시 또는
+        # 중첩·비정상 태그). 같은 모델로 재시도해도 결정적으로 동일하므로 재시도 없이 다음 모델로.
+        lowered = content.lower()
+        if "<think>" in lowered or "</think>" in lowered:
             raise ReasoningLeakError(
-                f"{model} 이 본문 없이 사고과정(<think>)만 반환했습니다(finish_reason={finish_reason}). "
+                f"{model} 이 본문 없이 사고과정(<think>) 누출만 반환했습니다(finish_reason={finish_reason}). "
                 "provider 가 reasoning.exclude 를 무시했을 가능성 — 재시도 없이 다음 모델로 폴백합니다."
             )
-        # <think> 도 없이 빈/공백 응답인 경우는 일시적일 수 있으므로(콘텐츠 필터 미설정·순간 장애 등)
+        # 태그 흔적도 없이 빈/공백 응답인 경우는 일시적일 수 있으므로(콘텐츠 필터 미설정·순간 장애 등)
         # 누출로 오분류하지 않고 일반 오류로 던져 재시도 경로를 태운다.
         raise SummarizationError(f"{model} 이 빈 응답을 반환했습니다(finish_reason={finish_reason}).")
     return stripped
