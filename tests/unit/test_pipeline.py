@@ -48,12 +48,17 @@ def test_cache_miss_transcribes_and_stores(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline.cache, "load", lambda d, k: None)
     monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt: _seg())
     stored = {}
-    monkeypatch.setattr(pipeline.cache, "store", lambda d, k, s: stored.update({"k": k, "s": s}))
+    monkeypatch.setattr(
+        pipeline.cache,
+        "store",
+        lambda d, k, s, source_name="": stored.update({"k": k, "s": s, "source_name": source_name}),
+    )
 
     out = pipeline._transcribe_or_load(Path("in.qta"), Path("in.wav"), cfg)
     assert out == _seg()
     assert stored["k"] == "key1"
     assert stored["s"] == _seg()
+    assert stored["source_name"] == "in.qta"  # 원본 파일명이 캐시 메타로 전달된다
 
 
 def test_cache_disabled_always_transcribes(monkeypatch, tmp_path):

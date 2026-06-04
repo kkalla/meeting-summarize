@@ -101,7 +101,7 @@ def _transcribe_or_load(input_path: Path, wav_path: Path, config: PipelineConfig
         return cached
 
     segments = transcribe(wav_path, config.stt)
-    cache.store(cache_cfg.transcripts_dir, key, segments)
+    cache.store(cache_cfg.transcripts_dir, key, segments, source_name=input_path.name)
     return segments
 
 

@@ -47,14 +47,19 @@ def _cache_path(cache_dir: Path, key: str) -> Path:
     return cache_dir / f"{key}{_SUFFIX}"
 
 
-def store(cache_dir: Path, key: str, segments: list[Segment]) -> None:
+def store(cache_dir: Path, key: str, segments: list[Segment], source_name: str = "") -> None:
     """전사 결과를 캐시에 원자적으로 저장한다.
 
     tmp 파일에 쓰고 같은 디렉토리 내에서 rename 해 부분 쓰인 캐시가 보이지 않게 한다.
     저장 실패는 로그만 남기고 삼킨다(파이프라인을 막지 않는다 — 이번엔 캐시를 못 남길 뿐).
+
+    Args:
+        source_name: 원본 파일명(예: ``회의.qta``). 복원에는 쓰지 않고, 사람이 캐시
+            파일만 보고 어느 녹음의 전사인지 식별하기 위한 디버깅용 메타데이터다.
     """
     payload = {
         "version": CACHE_VERSION,
+        "source_name": source_name,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "segments": [asdict(seg) for seg in segments],
     }

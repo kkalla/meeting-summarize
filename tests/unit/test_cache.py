@@ -52,6 +52,15 @@ def test_store_load_roundtrip(tmp_path):
     assert loaded == _segments()  # frozen dataclass 동등성 — None 필드까지 보존
 
 
+def test_store_writes_source_name_metadata(tmp_path):
+    # source_name 은 복원에는 안 쓰지만, 캐시 파일만 보고 어느 녹음인지 알 수 있게 남긴다.
+    cache.store(tmp_path, "k", _segments(), source_name="회의.qta")
+    data = json.loads((tmp_path / "k.json").read_text(encoding="utf-8"))
+    assert data["source_name"] == "회의.qta"
+    # 메타데이터가 있어도 복원은 정상 동작해야 한다.
+    assert cache.load(tmp_path, "k") == _segments()
+
+
 def test_store_creates_dir(tmp_path):
     target = tmp_path / "transcripts" / "nested"
     cache.store(target, "k", _segments())
