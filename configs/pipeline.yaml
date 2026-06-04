@@ -17,6 +17,11 @@ stt:
   language: "ko"
   # whisper-cli subprocess 타임아웃(초). 긴 회의 대비 넉넉하게.
   timeout_sec: 3600
+  # 전사 예상시간 추정용 RTF(real-time factor): 예상 소요 = 오디오길이(초) × rtf_estimate.
+  # 시작 로그에 "예상 ~N초" 를 찍는 휴리스틱이며 전사 자체에는 영향 없음.
+  # large-v3-turbo 기준 대략값. 첫 전사 후 실제(전사완료 로그) 대비 보정 권장
+  # (Apple Silicon Metal 가속이면 더 작게, CPU-only 면 더 크게).
+  rtf_estimate: 0.2
   # 무음/환각 신뢰도 게이트.
   confidence_gate:
     # 세그먼트 no_speech_prob 가 이 값을 넘으면 무음으로 간주.

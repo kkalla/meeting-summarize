@@ -15,6 +15,7 @@ from src.transcribe import (
     apply_confidence_gate,
     check_completeness,
     parse_segments,
+    transcribe,
 )
 
 
@@ -23,6 +24,18 @@ def _gate(max_no_speech=0.6, min_avg_logprob=-1.0, min_valid_ratio=0.2) -> Confi
         max_no_speech_prob=max_no_speech,
         min_avg_logprob=min_avg_logprob,
         min_valid_ratio=min_valid_ratio,
+    )
+
+
+def _stt_config(rtf_estimate=0.2) -> SttConfig:
+    return SttConfig(
+        whisper_cli="/fake/whisper-cli",
+        model_path="/fake/model.bin",
+        language="ko",
+        timeout_sec=10,
+        confidence_gate=_gate(),
+        completeness_tolerance_sec=5.0,
+        rtf_estimate=rtf_estimate,
     )
 
 
@@ -35,14 +48,7 @@ def test_run_whisper_wraps_oserror_as_transcription_error(tmp_path, monkeypatch)
         raise OSError("Permission denied")
 
     monkeypatch.setattr("src.transcribe.subprocess.run", boom)
-    config = SttConfig(
-        whisper_cli="/fake/whisper-cli",
-        model_path="/fake/model.bin",
-        language="ko",
-        timeout_sec=10,
-        confidence_gate=_gate(),
-        completeness_tolerance_sec=5.0,
-    )
+    config = _stt_config()
 
     # Act / Assert: 원시 OSError 가 아니라 TranscriptionError 로 변환되어야 한다
     with pytest.raises(TranscriptionError):
@@ -63,14 +69,7 @@ def test_run_whisper_tolerates_non_utf8_bytes_in_token_text(tmp_path, monkeypatc
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
-    config = SttConfig(
-        whisper_cli="/fake/whisper-cli",
-        model_path="/fake/model.bin",
-        language="ko",
-        timeout_sec=10,
-        confidence_gate=_gate(),
-        completeness_tolerance_sec=5.0,
-    )
+    config = _stt_config()
 
     # Act: invalid byte 가 있어도 파싱이 깨지지 않아야 한다
     data = _run_whisper(tmp_path / "a.wav", prefix, config)
@@ -80,6 +79,85 @@ def test_run_whisper_tolerates_non_utf8_bytes_in_token_text(tmp_path, monkeypatc
     assert len(segments) == 1
     assert segments[0].text == "안녕"
     assert segments[0].avg_logprob is not None
+
+
+def test_run_whisper_logs_eta_when_duration_given(tmp_path, monkeypatch, caplog):
+    # Arrange: 정상 JSON 을 내는 whisper, 오디오 100초 + rtf 0.2 → 예상 ~20초
+    prefix = tmp_path / "out"
+    prefix.with_suffix(".json").write_text(
+        '{"transcription": [{"offsets": {"from": 0, "to": 1000}, "text": "안녕"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "src.transcribe.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stderr=""),
+    )
+    config = _stt_config(rtf_estimate=0.2)
+
+    # Act
+    with caplog.at_level("INFO", logger="src.transcribe"):
+        _run_whisper(tmp_path / "a.wav", prefix, config, duration_sec=100.0)
+
+    # Assert: 시작 로그에 오디오 길이와 예상 소요시간(100×0.2=20초)이 찍힌다
+    start_log = next(r.message for r in caplog.records if "전사 시작" in r.message)
+    assert "오디오 100초" in start_log
+    assert "예상 ~20초" in start_log
+
+
+# --- transcribe (오케스트레이션) ------------------------------------------
+
+
+def _valid_transcription(end_ms: int = 1000) -> dict:
+    """신뢰도 게이트를 통과하는 최소 유효 전사(무음확률 낮음 + logprob 높음).
+
+    ``end_ms`` 로 마지막 세그먼트 끝을 오디오 길이에 맞춰 완전성 검사 통과를 보장한다.
+    """
+    return {
+        "transcription": [
+            {
+                "offsets": {"from": 0, "to": end_ms},
+                "text": "안녕",
+                "no_speech_prob": 0.1,
+                "tokens": [{"p": 0.9}],
+            }
+        ]
+    }
+
+
+def _patch_transcribe_internals(monkeypatch, *, duration, data):
+    # transcribe() 종료 로그/RTF 계산만 보려고 의존성 검사·WAV 읽기·subprocess 를 우회한다.
+    monkeypatch.setattr("src.transcribe._check_dependencies", lambda config: None)
+    monkeypatch.setattr("src.transcribe._wav_duration_sec", lambda path: duration)
+    monkeypatch.setattr("src.transcribe._run_whisper", lambda *a, **k: data)
+
+
+def test_transcribe_logs_completion_with_actual_rtf(tmp_path, monkeypatch, caplog):
+    # Arrange: 오디오 100초, 전사는 mock 으로 즉시 반환(세그먼트 끝=100초 → 완전성 통과)
+    _patch_transcribe_internals(monkeypatch, duration=100.0, data=_valid_transcription(end_ms=100_000))
+
+    # Act
+    with caplog.at_level("INFO", logger="src.transcribe"):
+        segments = transcribe(tmp_path / "a.wav", _stt_config())
+
+    # Assert: 종료 로그에 오디오 길이·실측 RTF 가 찍힌다
+    assert len(segments) == 1
+    end_log = next(r.message for r in caplog.records if "전사 종료" in r.message)
+    assert "오디오 100초" in end_log
+    assert "RTF" in end_log
+
+
+def test_transcribe_zero_duration_does_not_divide_by_zero(tmp_path, monkeypatch, caplog):
+    # Arrange: 길이 0 오디오(빈/손상 WAV 경계) — actual_rtf 가드 없으면 ZeroDivisionError
+    _patch_transcribe_internals(monkeypatch, duration=0.0, data=_valid_transcription())
+
+    # Act: 예외 없이 통과해야 한다
+    with caplog.at_level("INFO", logger="src.transcribe"):
+        segments = transcribe(tmp_path / "a.wav", _stt_config())
+
+    # Assert: 0 으로 나누지 않고 RTF 0.00 으로 안전하게 로깅
+    assert len(segments) == 1
+    end_log = next(r.message for r in caplog.records if "전사 종료" in r.message)
+    assert "RTF 0.00" in end_log
 
 
 # --- parse_segments -------------------------------------------------------
