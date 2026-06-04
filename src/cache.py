@@ -34,11 +34,17 @@ _SUFFIX = ".json"
 def _stt_fingerprint(stt: SttConfig) -> str:
     """전사 출력을 좌우하는 STT 설정의 짧은 지문(hex 16자)을 반환한다.
 
-    같은 오디오라도 모델/언어가 다르면 전사 결과가 달라지므로, 이 지문을 캐시 키에
-    섞어 설정 변경 시 옛 전사가 잘못 재사용되는 것을 막는다. ETA 표시 전용인
+    같은 오디오라도 모델/언어/초기 프롬프트가 다르면 전사 결과가 달라지므로, 이 지문을
+    캐시 키에 섞어 설정 변경 시 옛 전사가 잘못 재사용되는 것을 막는다. ETA 표시 전용인
     ``rtf_estimate`` 나 ``timeout_sec`` 처럼 출력에 영향 없는 필드는 제외한다.
+
+    ``prompt`` 는 옛 캐시 더블(필드 없음)도 견디도록 getattr 로 읽는다(기본 "").
     """
-    fingerprint = {"model_path": stt.model_path, "language": stt.language}
+    fingerprint = {
+        "model_path": stt.model_path,
+        "language": stt.language,
+        "prompt": getattr(stt, "prompt", ""),
+    }
     encoded = json.dumps(fingerprint, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
 

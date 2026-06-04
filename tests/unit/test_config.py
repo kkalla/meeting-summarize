@@ -50,6 +50,19 @@ def test_build_config_missing_cache_section_defaults_disabled():
     assert cfg.cache.enabled is False
 
 
+def test_build_config_parses_stt_prompt_and_strips():
+    raw = _raw()
+    raw["stt"]["prompt"] = "  비식별화, 밸리데이트  "
+    cfg = _build_config(raw, api_key="k")
+    assert cfg.stt.prompt == "비식별화, 밸리데이트"  # 앞뒤 공백 제거
+
+
+def test_build_config_stt_prompt_defaults_empty_when_missing():
+    raw = _raw()  # stt.prompt 키 없음(기존 설정 파일 하위호환)
+    cfg = _build_config(raw, api_key="k")
+    assert cfg.stt.prompt == ""
+
+
 def _raw() -> dict:
     """검증을 통과하는 최소 정상 YAML dict."""
     return {

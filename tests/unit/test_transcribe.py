@@ -27,7 +27,7 @@ def _gate(max_no_speech=0.6, min_avg_logprob=-1.0, min_valid_ratio=0.2) -> Confi
     )
 
 
-def _stt_config(rtf_estimate=0.2) -> SttConfig:
+def _stt_config(rtf_estimate=0.2, prompt="") -> SttConfig:
     return SttConfig(
         whisper_cli="/fake/whisper-cli",
         model_path="/fake/model.bin",
@@ -36,7 +36,58 @@ def _stt_config(rtf_estimate=0.2) -> SttConfig:
         confidence_gate=_gate(),
         completeness_tolerance_sec=5.0,
         rtf_estimate=rtf_estimate,
+        prompt=prompt,
     )
+
+
+def _whisper_json(tmp_path):
+    """정상 transcription JSON 을 써 두고 prefix(Path) 를 반환한다(cmd 검증용 공통 헬퍼)."""
+    prefix = tmp_path / "out"
+    prefix.with_suffix(".json").write_text(
+        '{"transcription": [{"offsets": {"from": 0, "to": 1000}, "text": "안녕"}]}',
+        encoding="utf-8",
+    )
+    return prefix
+
+
+def test_run_whisper_injects_prompt_flag_when_set(tmp_path, monkeypatch):
+    # Arrange: 초기 프롬프트가 설정된 STT 설정
+    prefix = _whisper_json(tmp_path)
+    captured: dict = {}
+
+    def fake_run(cmd, *_a, **_k):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+    config = _stt_config(prompt="비식별화, 밸리데이트")
+
+    # Act
+    _run_whisper(tmp_path / "a.wav", prefix, config)
+
+    # Assert: --prompt 와 그 값이 정확히 cmd 에 들어간다
+    cmd = captured["cmd"]
+    assert "--prompt" in cmd
+    assert cmd[cmd.index("--prompt") + 1] == "비식별화, 밸리데이트"
+
+
+def test_run_whisper_omits_prompt_flag_when_empty(tmp_path, monkeypatch):
+    # Arrange: 프롬프트 없음(기본 "")
+    prefix = _whisper_json(tmp_path)
+    captured: dict = {}
+
+    def fake_run(cmd, *_a, **_k):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+    config = _stt_config()
+
+    # Act
+    _run_whisper(tmp_path / "a.wav", prefix, config)
+
+    # Assert: 빈 프롬프트면 --prompt 자체가 빠진다(기본 동작 유지)
+    assert "--prompt" not in captured["cmd"]
 
 
 # --- _run_whisper 예외 래핑 ------------------------------------------------

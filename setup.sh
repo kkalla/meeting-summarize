@@ -2,14 +2,14 @@
 # 외부 의존성 설치 자동화 (멱등). macOS / Apple Silicon 기준.
 #   - ffmpeg (brew)
 #   - whisper.cpp 클론 + Metal 가속 빌드 -> whisper-cli
-#   - ggml-large-v3-turbo 모델 다운로드
+#   - ggml-large-v3 모델 다운로드 (한국어 정확도 우선; turbo 대비 느리지만 인식 품질↑)
 # 여러 번 실행해도 안전하도록, 이미 있는 단계는 건너뜁니다.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR_DIR="${ROOT_DIR}/vendor"
 WHISPER_DIR="${VENDOR_DIR}/whisper.cpp"
-MODEL_NAME="large-v3-turbo"
+MODEL_NAME="large-v3"
 MODEL_FILE="${WHISPER_DIR}/models/ggml-${MODEL_NAME}.bin"
 WHISPER_CLI="${WHISPER_DIR}/build/bin/whisper-cli"
 

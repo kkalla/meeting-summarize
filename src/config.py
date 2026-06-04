@@ -88,6 +88,10 @@ class SttConfig:
     # 시작 로그에 예상 소요시간을 찍는 데만 쓰이는 휴리스틱이라 전사 동작에는 영향 없음.
     # 모델/하드웨어(Metal 가속 여부 등)마다 다르므로 실측 후 보정한다.
     rtf_estimate: float
+    # whisper 초기 프롬프트(initial prompt). 도메인 용어·고유명사를 미리 주입해 한국어
+    # 전문용어 오인식(예: "비식별화"→"비식별아")을 줄인다. 비우면 --prompt 를 넘기지 않는다.
+    # 전사 출력을 좌우하므로 캐시 키(_stt_fingerprint)에도 반영된다.
+    prompt: str = ""
 
     def __post_init__(self) -> None:
         # 0/음수면 예상시간이 0 이하로 찍혀 의미가 없다. ETA 표시 전용 값이므로
@@ -269,6 +273,8 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
                 ),
                 completeness_tolerance_sec=float(stt_raw["completeness_tolerance_sec"]),
                 rtf_estimate=float(stt_raw["rtf_estimate"]),
+                # prompt 는 신규·선택 필드라 .get 으로 읽어 기존 설정 파일도 그대로 동작하게 한다.
+                prompt=str(stt_raw.get("prompt", "")).strip(),
             ),
             chunking=ChunkingConfig(
                 minutes=int(chunk_raw["minutes"]),

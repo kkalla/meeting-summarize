@@ -202,6 +202,10 @@ def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig, duration_sec: 
         "-of",
         str(prefix),
     ]
+    # 초기 프롬프트(도메인 용어집)가 있으면 주입해 한국어 전문용어 오인식을 줄인다.
+    # 비어 있으면 옵션을 넘기지 않아 whisper.cpp 기본 동작(프롬프트 없음)을 유지한다.
+    if config.prompt:
+        cmd += ["--prompt", config.prompt]
     if duration_sec is not None:
         eta_sec = duration_sec * config.rtf_estimate
         logger.info(
