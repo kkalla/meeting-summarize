@@ -1,0 +1,185 @@
+"""폴더 watcher: inbox 를 폴링해 안정화된 녹음파일을 파이프라인에 흘려보낸다.
+
+podman 컨테이너 안에서 데몬으로 동작한다. 새 파일이 업로드되면(크기 안정화로
+완료 판정) 기존 :func:`~src.pipeline.run_pipeline` 을 그대로 호출하고, 결과에 따라
+원본을 ``processed/`` 또는 ``failed/`` 로 옮긴다. 한 번에 한 파일씩 순차 처리한다.
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import time
+from datetime import datetime
+from pathlib import Path
+
+from src.config import PipelineConfig, WatcherConfig
+from src.exceptions import PipelineError
+from src.pipeline import run_pipeline
+
+logger = logging.getLogger(__name__)
+
+REPORT_SUFFIX = ".md"
+# stop 신호에 빠르게 반응하도록 sleep 을 이 간격(초)으로 잘게 나눈다.
+SLEEP_SLICE_SEC = 1
+
+
+class FolderWatcher:
+    """inbox 폴더를 폴링하며 안정화된 녹음파일을 처리하는 watcher.
+
+    Attributes:
+        config: 파이프라인 전체 설정(파이프라인 호출에 재사용).
+        config_path: ``run_pipeline`` 에 넘길 설정 YAML 경로.
+
+    Example:
+        >>> watcher = FolderWatcher(load_config(), "configs/pipeline.yaml")
+        >>> watcher.run()  # SIGINT 까지 블로킹
+    """
+
+    def __init__(self, config: PipelineConfig, config_path: str) -> None:
+        self._config = config
+        self._wcfg: WatcherConfig = config.watcher
+        self._config_path = config_path
+        # 파일별 직전 (size, mtime) 스냅샷과 연속 동일 횟수.
+        self._snapshots: dict[Path, tuple[int, float]] = {}
+        self._stable_counts: dict[Path, int] = {}
+        self._stop = False
+
+    def request_stop(self) -> None:
+        """다음 안전 지점에서 폴링 루프를 멈추도록 요청한다(시그널 핸들러용)."""
+        logger.info("종료 신호 수신 — 현재 작업을 마치고 멈춥니다")
+        self._stop = True
+
+    def run(self) -> None:
+        """폴링 루프를 시작한다. :meth:`request_stop` 전까지 블로킹한다."""
+        self._ensure_dirs()
+        logger.info(
+            "watcher 시작: inbox=%s 폴링=%ds 안정화=%d회",
+            self._wcfg.inbox_dir,
+            self._wcfg.poll_interval_sec,
+            self._wcfg.stability_checks,
+        )
+        while not self._stop:
+            try:
+                self._scan_once()
+            except OSError as exc:
+                logger.error("inbox 스캔 실패: %s", exc)
+            self._sleep(self._wcfg.poll_interval_sec)
+        logger.info("watcher 종료")
+
+    def _ensure_dirs(self) -> None:
+        """watcher 가 쓰는 디렉토리 4종을 미리 만든다."""
+        for directory in (
+            self._wcfg.inbox_dir,
+            self._wcfg.processed_dir,
+            self._wcfg.failed_dir,
+            self._wcfg.output_dir,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+
+    def _scan_once(self) -> None:
+        """inbox 를 한 번 스캔해 안정화된 파일을 순차 처리한다."""
+        files = self._list_candidates()
+        self._forget_vanished(files)
+        for path in files:
+            if self._stop:
+                break
+            try:
+                if self._is_stable(path):
+                    self._process_file(path)
+            except OSError as exc:
+                # 스캔 도중 파일이 사라지거나 접근 불가 — 다음 파일로 넘어간다.
+                logger.warning("파일 접근 실패, 건너뜀: %s (%s)", path.name, exc)
+
+    def _list_candidates(self) -> list[Path]:
+        """inbox 안의 대상 확장자 파일을 이름순으로 반환한다."""
+        exts = self._wcfg.extensions
+        candidates: list[Path] = []
+        for path in self._wcfg.inbox_dir.iterdir():
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in exts:
+                logger.debug("대상 아닌 확장자, 무시: %s", path.name)
+                continue
+            candidates.append(path)
+        return sorted(candidates)
+
+    def _forget_vanished(self, current: list[Path]) -> None:
+        """더 이상 inbox 에 없는 파일의 추적 상태를 정리한다(메모리 누수 방지)."""
+        present = set(current)
+        for tracked in [p for p in self._snapshots if p not in present]:
+            self._snapshots.pop(tracked, None)
+            self._stable_counts.pop(tracked, None)
+
+    def _is_stable(self, path: Path) -> bool:
+        """``(size, mtime)`` 가 연속 ``stability_checks`` 회 동일한지 판정한다.
+
+        Args:
+            path: 검사할 파일 경로.
+
+        Returns:
+            업로드가 끝나 처리해도 되는 상태면 ``True``.
+        """
+        stat = path.stat()
+        current = (stat.st_size, stat.st_mtime)
+        previous = self._snapshots.get(path)
+        self._snapshots[path] = current
+        if previous == current:
+            self._stable_counts[path] = self._stable_counts.get(path, 1) + 1
+        else:
+            self._stable_counts[path] = 1
+        return self._stable_counts[path] >= self._wcfg.stability_checks
+
+    def _process_file(self, path: Path) -> None:
+        """파일 하나를 파이프라인에 통과시키고 결과에 따라 이동한다."""
+        output_path = self._wcfg.output_dir / f"{path.stem}{REPORT_SUFFIX}"
+        logger.info("처리 시작: %s", path.name)
+        try:
+            run_pipeline(path, output_path, self._config_path)
+        except (PipelineError, FileNotFoundError) as exc:
+            # 예상된 도메인 실패(전사/요약/입력 누락). 파일만 failed 로 옮기고 계속 진행.
+            logger.error("처리 실패: %s (%s)", path.name, exc)
+            dest = self._move(path, self._wcfg.failed_dir)
+            logger.info("실패 파일 이동: %s -> %s", path.name, dest)
+        except Exception:  # noqa: BLE001 - 데몬 생존이 우선: 어떤 파일도 루프를 죽이면 안 됨
+            # 예상치 못한 예외(SDK 오류 등)도 삼키지 말고 traceback 을 남긴 뒤 failed 로.
+            # 그대로 전파시키면 스캔 루프가 죽고 restart 정책상 같은 파일을 무한 재시도한다.
+            logger.exception("예상치 못한 오류로 처리 실패: %s", path.name)
+            dest = self._move(path, self._wcfg.failed_dir)
+            logger.info("실패 파일 이동: %s -> %s", path.name, dest)
+        else:
+            dest = self._move(path, self._wcfg.processed_dir)
+            logger.info("처리 완료: %s -> %s (리포트: %s)", path.name, dest, output_path)
+        finally:
+            self._snapshots.pop(path, None)
+            self._stable_counts.pop(path, None)
+
+    def _move(self, path: Path, dest_dir: Path) -> Path:
+        """``path`` 를 ``dest_dir`` 로 옮긴다. 이름 충돌 시 타임스탬프 suffix 를 붙인다.
+
+        Args:
+            path: 옮길 원본 파일.
+            dest_dir: 목적지 디렉토리.
+
+        Returns:
+            실제로 옮겨진 최종 경로.
+        """
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / path.name
+        if dest.exists():
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dest = dest_dir / f"{path.stem}_{timestamp}{path.suffix}"
+        # shutil 대신 Path.replace 로 같은 파일시스템 내 원자적 이동을 시도하고,
+        # 교차 파일시스템(볼륨 마운트 경계)이면 복사 후 삭제로 폴백한다.
+        try:
+            path.replace(dest)
+        except OSError:
+            shutil.move(str(path), str(dest))
+        return dest
+
+    def _sleep(self, seconds: int) -> None:
+        """``seconds`` 만큼 자되, stop 신호에 빠르게 반응하도록 잘게 나눈다."""
+        for _ in range(max(0, seconds)):
+            if self._stop:
+                return
+            time.sleep(SLEEP_SLICE_SEC)

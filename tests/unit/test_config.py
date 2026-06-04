@@ -45,6 +45,15 @@ def _raw() -> dict:
             "temperature": 0.3,
             "max_chunk_failure_pct": 0,
         },
+        "watcher": {
+            "inbox_dir": "/data/inbox",
+            "processed_dir": "/data/processed",
+            "failed_dir": "/data/failed",
+            "output_dir": "/data/output",
+            "poll_interval_sec": 10,
+            "stability_checks": 2,
+            "extensions": [".m4a", ".wav"],
+        },
     }
 
 

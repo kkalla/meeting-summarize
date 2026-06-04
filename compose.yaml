@@ -1,0 +1,24 @@
+# podman compose (또는 docker compose) 로 watcher 데몬을 띄운다.
+#   podman compose up -d --build
+# 사전 준비:
+#   1) 호스트에서 setup.sh 로 모델(.bin)을 받아둔다(vendor/whisper.cpp/models/).
+#   2) .env 에 OPENROUTER_API_KEY 를 채운다.
+#   3) data/inbox 에 녹음파일을 떨구면 자동 처리되어 data/output 에 요약이 생긴다.
+services:
+  watcher:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: meeting-watcher
+    restart: unless-stopped
+    # OPENROUTER_API_KEY 등 시크릿을 환경변수로 주입(이미지에 굽지 않음).
+    env_file:
+      - .env
+    volumes:
+      # 입출력 폴더 — 호스트 data/ 를 컨테이너 /data 경로(config 기본값)에 마운트.
+      - ./data/inbox:/data/inbox
+      - ./data/processed:/data/processed
+      - ./data/failed:/data/failed
+      - ./data/output:/data/output
+      # 모델(.bin)은 플랫폼 독립이라 호스트 빌드본을 컨테이너 빌드 경로에 그대로 마운트.
+      - ./vendor/whisper.cpp/models/ggml-large-v3-turbo.bin:/app/vendor/whisper.cpp/models/ggml-large-v3-turbo.bin:ro

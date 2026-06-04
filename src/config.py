@@ -33,6 +33,19 @@ def _resolve_resource(value: str) -> str:
     return str(PROJECT_ROOT / value)
 
 
+def _resolve_dir(value: str) -> Path:
+    """watcher 디렉토리 경로를 해석한다.
+
+    절대경로(예: 컨테이너의 ``/data/inbox``)는 그대로 두고, 상대경로는 프로젝트
+    루트 기준으로 절대화한다. :func:`_resolve_resource` 는 단일 토큰(명령/파일)
+    전용이라 디렉토리에는 이 함수를 쓴다.
+    """
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
 @dataclass(frozen=True)
 class AudioConfig:
     """오디오 전처리(ffmpeg) 설정."""
@@ -124,6 +137,19 @@ class SummarizeConfig:
 
 
 @dataclass(frozen=True)
+class WatcherConfig:
+    """폴더 watcher 데몬 설정."""
+
+    inbox_dir: Path
+    processed_dir: Path
+    failed_dir: Path
+    output_dir: Path
+    poll_interval_sec: int
+    stability_checks: int
+    extensions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PipelineConfig:
     """파이프라인 전체 설정 + 런타임 시크릿(API 키)."""
 
@@ -131,6 +157,7 @@ class PipelineConfig:
     stt: SttConfig
     chunking: ChunkingConfig
     summarize: SummarizeConfig
+    watcher: WatcherConfig
     api_key: str
 
 
@@ -183,6 +210,9 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
         gate_raw = stt_raw["confidence_gate"]
         chunk_raw = raw["chunking"]
         sum_raw = raw["summarize"]
+        watch_raw = raw.get("watcher")
+        if watch_raw is None:
+            raise DependencyError("설정에 watcher 섹션이 없습니다. configs/pipeline.yaml 의 watcher 섹션을 확인하세요.")
 
         return PipelineConfig(
             audio=AudioConfig(
@@ -216,6 +246,7 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
                 temperature=float(sum_raw["temperature"]),
                 max_chunk_failure_pct=float(sum_raw["max_chunk_failure_pct"]),
             ),
+            watcher=_build_watcher_config(watch_raw),
             api_key=api_key,
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -223,3 +254,30 @@ def _build_config(raw: dict, api_key: str) -> PipelineConfig:
             f"pipeline.yaml 설정이 올바르지 않습니다({type(exc).__name__}: {exc}). "
             "configs/pipeline.yaml 의 필수 키와 값 타입을 확인하세요."
         ) from exc
+
+
+def _build_watcher_config(watch_raw: dict) -> WatcherConfig:
+    """watcher 설정을 경계값 검증과 함께 빌드한다.
+
+    Raises:
+        DependencyError: 폴링 주기·안정화 횟수가 1 미만이거나 확장자 목록이 비었을 때.
+            (오설정 시 busy-spin 이나 무동작으로 빠지지 않도록 시작 시점에 빠르게 실패한다.)
+    """
+    poll_interval_sec = int(watch_raw["poll_interval_sec"])
+    stability_checks = int(watch_raw["stability_checks"])
+    extensions = tuple(str(ext).lower() for ext in watch_raw["extensions"])
+    if poll_interval_sec < 1:
+        raise DependencyError("watcher.poll_interval_sec 는 1 이상이어야 합니다(busy-spin 방지).")
+    if stability_checks < 1:
+        raise DependencyError("watcher.stability_checks 는 1 이상이어야 합니다.")
+    if not extensions:
+        raise DependencyError("watcher.extensions 가 비어 있습니다 — 처리할 확장자를 하나 이상 지정하세요.")
+    return WatcherConfig(
+        inbox_dir=_resolve_dir(str(watch_raw["inbox_dir"])),
+        processed_dir=_resolve_dir(str(watch_raw["processed_dir"])),
+        failed_dir=_resolve_dir(str(watch_raw["failed_dir"])),
+        output_dir=_resolve_dir(str(watch_raw["output_dir"])),
+        poll_interval_sec=poll_interval_sec,
+        stability_checks=stability_checks,
+        extensions=extensions,
+    )
