@@ -32,6 +32,9 @@ target-version = ["py311"]
 [tool.isort]
 profile = "black"
 line_length = 120
+# black/flake8 과 동일하게 vendor(외부 클론)·빌드 산출물은 정렬 검사에서 제외한다.
+# isort 는 .gitignore 를 자동으로 따르지 않으므로 명시한다.
+extend_skip_glob = ["vendor/*", "build/*", "dist/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
