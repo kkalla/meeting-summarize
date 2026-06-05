@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from src.config import (
+    MAX_STT_PROMPT_CHARS,
     CacheConfig,
     ChunkingConfig,
     ConfidenceGate,
@@ -75,9 +76,18 @@ def test_build_config_rejects_non_string_prompt(bad_prompt):
 
 def test_build_config_rejects_overlong_prompt():
     raw = _raw()
-    raw["stt"]["prompt"] = "가" * 2001  # MAX_STT_PROMPT_CHARS(2000) 초과
+    raw["stt"]["prompt"] = "가" * (MAX_STT_PROMPT_CHARS + 1)  # 상한 초과
     with pytest.raises(DependencyError):
         _build_config(raw, api_key="k")
+
+
+def test_build_config_accepts_prompt_at_exact_limit():
+    # 상한은 포함 경계(> 로 검사)이므로 정확히 MAX 자는 통과해야 한다.
+    # > 가 >= 로 바뀌는 off-by-one 회귀를 잡는다.
+    raw = _raw()
+    raw["stt"]["prompt"] = "가" * MAX_STT_PROMPT_CHARS
+    cfg = _build_config(raw, api_key="k")
+    assert len(cfg.stt.prompt) == MAX_STT_PROMPT_CHARS
 
 
 def _raw() -> dict:
@@ -172,6 +182,19 @@ def test_stt_config_strips_prompt_on_direct_construction():
 def test_stt_config_rejects_non_string_prompt_on_direct_construction():
     with pytest.raises(DependencyError):
         SttConfig(**_stt(prompt=True))
+
+
+def test_stt_config_whitespace_only_prompt_normalises_to_empty():
+    # 공백만 있는 프롬프트는 strip 후 ""가 되어, transcribe 의 `if config.prompt:`
+    # 게이트에서 falsy 로 걸러진다(--prompt "   " 가 whisper 에 주입되지 않게).
+    cfg = SttConfig(**_stt(prompt="   "))
+    assert cfg.prompt == ""
+
+
+def test_stt_config_rejects_overlong_prompt_on_direct_construction():
+    # 길이 불변식도 로딩 경로가 아니라 타입(__post_init__)이 소유하므로 직접 생성에서도 거부된다.
+    with pytest.raises(DependencyError):
+        SttConfig(**_stt(prompt="가" * (MAX_STT_PROMPT_CHARS + 1)))
 
 
 # --- ChunkingConfig -------------------------------------------------------
