@@ -18,6 +18,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from src import rtf_calibration
 from src.config import ConfidenceGate, SttConfig
 from src.exceptions import DependencyError, TranscriptionError
 
@@ -135,12 +136,15 @@ def apply_confidence_gate(segments: list[Segment], gate: ConfidenceGate) -> None
     logger.info("신뢰도 게이트 통과: 유효 세그먼트 %d/%d (%.0f%%)", valid, len(segments), ratio * 100)
 
 
-def transcribe(wav_path: Path, config: SttConfig) -> list[Segment]:
+def transcribe(wav_path: Path, config: SttConfig, rtf_state_path: Path | None = None) -> list[Segment]:
     """WAV 파일을 whisper-cli 로 전사해 검증된 세그먼트 리스트를 반환한다.
 
     Args:
         wav_path: 16kHz mono WAV 경로.
         config: STT 설정.
+        rtf_state_path: RTF 자동 보정 상태 파일 경로. 주어지면 직전 전사들의 실측
+            RTF(누적 EMA)로 ETA 를 추정하고, 이번 실측값을 다시 누적한다. None 이면
+            보정 없이 ``config.rtf_estimate`` 만 쓴다(테스트·단발 호출용).
 
     Returns:
         검증을 통과한 세그먼트 리스트.
@@ -154,14 +158,26 @@ def transcribe(wav_path: Path, config: SttConfig) -> list[Segment]:
     # 오디오 길이를 전사 전에 구해 시작 로그에 예상 소요시간을 함께 찍는다(완전성 검사에도 재사용).
     duration = _wav_duration_sec(wav_path)
 
+    # ETA 추정 RTF: 보정 상태가 있으면 실측 누적값, 없으면 설정 폴백.
+    eta_rtf = (
+        rtf_calibration.load_rtf(rtf_state_path, config.rtf_estimate)
+        if rtf_state_path is not None
+        else config.rtf_estimate
+    )
+
     started = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
         prefix = Path(tmp) / "out"
-        data = _run_whisper(wav_path, prefix, config, duration)
+        data = _run_whisper(wav_path, prefix, config, duration, eta_rtf)
     elapsed = time.monotonic() - started
     # 실제 소요시간과 RTF 를 남겨, 다음 전사의 예상치(rtf_estimate) 보정 근거로 쓴다.
     actual_rtf = elapsed / duration if duration > 0 else 0.0
     logger.info("whisper-cli 전사 종료: 실제 %.0f초 (오디오 %.0f초, RTF %.2f)", elapsed, duration, actual_rtf)
+
+    # 실측 RTF 를 누적해 다음 전사 ETA 를 보정한다(표시 전용 — 실패해도 전사엔 무관).
+    if rtf_state_path is not None and actual_rtf > 0.0:
+        new_rtf = rtf_calibration.update_rtf(rtf_state_path, actual_rtf, config.rtf_estimate)
+        logger.info("RTF 보정: 다음 전사 예상에 RTF %.2f 적용(실측 %.2f 반영)", new_rtf, actual_rtf)
 
     segments = parse_segments(data)
     check_completeness(segments, duration, config.completeness_tolerance_sec)
@@ -180,7 +196,13 @@ def _check_dependencies(config: SttConfig) -> None:
         raise DependencyError(f"whisper 모델이 없습니다: {config.model_path}. './setup.sh' 로 모델을 받으세요.")
 
 
-def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig, duration_sec: float | None = None) -> dict:
+def _run_whisper(
+    wav_path: Path,
+    prefix: Path,
+    config: SttConfig,
+    duration_sec: float | None = None,
+    eta_rtf: float | None = None,
+) -> dict:
     """whisper-cli 를 실행하고 생성된 JSON 을 파싱해 반환한다.
 
     Args:
@@ -188,6 +210,7 @@ def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig, duration_sec: 
         prefix: whisper-cli 출력 파일 prefix.
         config: STT 설정.
         duration_sec: 오디오 길이(초). 주어지면 시작 로그에 예상 소요시간을 함께 찍는다.
+        eta_rtf: ETA 추정에 쓸 RTF. None 이면 ``config.rtf_estimate`` 로 폴백한다.
     """
     cmd = [
         config.whisper_cli,
@@ -207,7 +230,7 @@ def _run_whisper(wav_path: Path, prefix: Path, config: SttConfig, duration_sec: 
     if config.prompt:
         cmd += ["--prompt", config.prompt]
     if duration_sec is not None:
-        eta_sec = duration_sec * config.rtf_estimate
+        eta_sec = duration_sec * (eta_rtf if eta_rtf is not None else config.rtf_estimate)
         logger.info(
             "whisper-cli 전사 시작: %s (오디오 %.0f초, 예상 ~%.0f초)",
             wav_path,
