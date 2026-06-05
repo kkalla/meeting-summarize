@@ -50,8 +50,11 @@ class FolderWatcher:
         self._stable_counts: dict[Path, int] = {}
         # 이동이 영구 실패(읽기전용/권한/디스크풀)해 inbox 에 남은 파일. 재처리를 막는다.
         self._quarantined: set[Path] = set()
-        # 마지막 캐시 정리 시각(monotonic). 0 이면 첫 스캔에서 즉시 한 번 정리한다.
-        self._last_purge_monotonic: float = 0.0
+        # 마지막 캐시 정리 시각(monotonic). -inf 면 "아직 정리 안 함" — 첫 스캔에서 즉시
+        # 한 번 정리한다. time.monotonic() 의 시작값은 플랫폼마다 달라(리눅스 uptime 은 크고
+        # 컨테이너/CI 는 작을 수 있음) 0 을 센티넬로 쓰면 첫 정리가 인터벌에 갇혀 스킵될 수
+        # 있으므로, 절대값에 의존하지 않는 -inf 를 쓴다.
+        self._last_purge_monotonic: float = float("-inf")
         self._stop = False
 
     def request_stop(self) -> None:
