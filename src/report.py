@@ -17,6 +17,7 @@ class ReportMeta:
         segment_count: 전사 세그먼트 수.
         chunk_count: 요약 청크 수.
         generated_at: 생성 시각 문자열(호출자가 주입).
+        model: 요약 본문을 생성한 모델명.
     """
 
     source_file: str
@@ -24,6 +25,7 @@ class ReportMeta:
     segment_count: int
     chunk_count: int
     generated_at: str
+    model: str
 
 
 def render_report(summary_body: str, meta: ReportMeta) -> str:
@@ -43,6 +45,7 @@ def render_report(summary_body: str, meta: ReportMeta) -> str:
             f"- **원본**: {meta.source_file}",
             f"- **길이**: {_format_duration(meta.duration_sec)}",
             f"- **세그먼트**: {meta.segment_count}개 / **청크**: {meta.chunk_count}개",
+            f"- **요약 모델**: {meta.model}",
             f"- **생성**: {meta.generated_at}",
             "",
             "---",

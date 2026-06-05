@@ -12,6 +12,7 @@ def _meta() -> ReportMeta:
         segment_count=42,
         chunk_count=3,
         generated_at="2026-06-04 10:00:00",
+        model="test/model-x",
     )
 
 
@@ -22,6 +23,7 @@ def test_report_includes_title_and_meta():
     assert "회의.m4a" in report
     assert "2분 5초" in report  # 125초 포맷
     assert "42개" in report
+    assert "test/model-x" in report  # 요약 모델명이 헤더에 들어간다
     assert "2026-06-04 10:00:00" in report
 
 

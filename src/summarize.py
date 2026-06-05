@@ -10,6 +10,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from openai import (
     APIError,
@@ -31,6 +32,21 @@ from src.exceptions import (
 logger = logging.getLogger(__name__)
 
 PCT_FULL = 100.0
+
+
+@dataclass(frozen=True)
+class SummaryResult:
+    """요약 결과. 본문과 최종 본문을 생성한 모델명을 함께 담는다.
+
+    Attributes:
+        body: 3섹션 Markdown 요약 본문.
+        model: 최종 본문(single-shot 또는 reduce)을 성공적으로 생성한 모델명.
+            폴백 체인에서 실제로 채택된 모델이라 config 의 첫 모델과 다를 수 있다.
+    """
+
+    body: str
+    model: str
+
 
 # OpenAI chat completions 의 finish_reason 값. max_tokens 소진으로 본문이 잘린 경우.
 _FINISH_REASON_LENGTH = "length"
@@ -79,7 +95,7 @@ def summarize_meeting(
     single_shot_max_chars: int,
     client: OpenAI | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
-) -> str:
+) -> SummaryResult:
     """청크 리스트를 통합 요약(Markdown) 으로 변환한다.
 
     Args:
@@ -93,7 +109,7 @@ def summarize_meeting(
         sleep_fn: 백오프 대기 함수(테스트에서 no-op 주입).
 
     Returns:
-        3섹션 Markdown 요약 본문.
+        본문과 최종 본문을 생성한 모델명을 담은 :class:`SummaryResult`.
 
     Raises:
         SummarizationError: 청크가 비었거나, 누락률 초과, 또는 모든 모델 실패.
@@ -103,25 +119,29 @@ def summarize_meeting(
 
     llm = client or OpenAI(base_url=config.base_url, api_key=api_key)
 
-    def complete(prompt: str) -> str:
+    def complete(prompt: str) -> tuple[str, str]:
         return _complete_with_fallback(prompt, config=config, client=llm, sleep_fn=sleep_fn)
 
     total_chars = sum(len(chunk.text) for chunk in chunks)
     if len(chunks) <= 1 or total_chars <= single_shot_max_chars:
         logger.info("single-shot 요약 분기 (청크 %d개, %d자)", len(chunks), total_chars)
         full_text = "\n".join(chunk.text for chunk in chunks)
-        return complete(reduce_template.format(partial_summaries=full_text))
+        body, model = complete(reduce_template.format(partial_summaries=full_text))
+        return SummaryResult(body=body, model=model)
 
     partials = _run_map(chunks, map_template, complete, config)
     reduce_input = _build_reduce_input(chunks, partials)
     logger.info("reduce 통합 요약 시작 (부분요약 %d개)", len(partials))
-    return complete(reduce_template.format(partial_summaries=reduce_input))
+    # 최종 본문을 만드는 건 reduce 단계이므로, 리포트에 남길 대표 모델은 reduce 가 채택한 모델이다
+    # (Map 단계는 청크별로 다른 모델로 폴백했을 수 있으나 최종 통합본은 reduce 가 생성).
+    body, model = complete(reduce_template.format(partial_summaries=reduce_input))
+    return SummaryResult(body=body, model=model)
 
 
 def _run_map(
     chunks: list[Chunk],
     map_template: str,
-    complete: Callable[[str], str],
+    complete: Callable[[str], tuple[str, str]],
     config: SummarizeConfig,
 ) -> dict[int, str]:
     """청크별 부분요약을 생성한다(메모리 캐시). 누락률 초과 시 전체 실패.
@@ -136,7 +156,9 @@ def _run_map(
     failed: list[int] = []
     for chunk in chunks:
         try:
-            partials[chunk.index] = complete(map_template.format(chunk_text=chunk.text))
+            # complete 는 (본문, 모델) 을 주지만 Map 단계는 본문만 모은다 — 대표 모델은
+            # 최종 통합본을 만드는 reduce 호출에서 정한다.
+            partials[chunk.index] = complete(map_template.format(chunk_text=chunk.text))[0]
             logger.info("청크 %d/%d 부분요약 완료", chunk.index + 1, len(chunks))
         except SummarizationError as exc:
             logger.warning("청크 %d 부분요약 실패: %s", chunk.index + 1, exc)
@@ -169,8 +191,11 @@ def _complete_with_fallback(
     config: SummarizeConfig,
     client: OpenAI,
     sleep_fn: Callable[[float], None],
-) -> str:
+) -> tuple[str, str]:
     """폴백 체인을 순회하며 각 모델에서 지수 백오프 재시도로 LLM 을 호출한다.
+
+    Returns:
+        ``(본문, 성공한 모델명)`` 튜플.
 
     Raises:
         SummarizationError: 모든 모델/재시도를 소진했을 때.
@@ -181,7 +206,7 @@ def _complete_with_fallback(
             try:
                 # _chat_once 는 항상 non-empty 로 strip 된 본문을 반환한다(빈 응답/None/누출은
                 # 내부에서 예외로 변환). 따라서 여기서 빈 응답을 다시 검사할 필요가 없다.
-                return _chat_once(prompt, model=model, config=config, client=client)
+                return _chat_once(prompt, model=model, config=config, client=client), model
             except _FATAL_ERRORS as exc:
                 raise SummarizationError(f"인증/권한 오류로 요약을 중단합니다(키를 확인하세요): {exc}") from exc
             except (ReasoningLeakError, TruncatedResponseError) as exc:

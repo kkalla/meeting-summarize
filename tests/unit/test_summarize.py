@@ -11,7 +11,7 @@ from openai import AuthenticationError
 from src.chunking import Chunk
 from src.config import SummarizeConfig
 from src.exceptions import SummarizationError
-from src.summarize import summarize_meeting
+from src.summarize import SummaryResult, summarize_meeting
 
 
 def _auth_error() -> AuthenticationError:
@@ -75,7 +75,9 @@ def _summarize(chunks, client, **overrides):
         sleep_fn=NO_SLEEP,
     )
     kwargs.update(overrides)
-    return summarize_meeting(chunks, **kwargs)
+    # 기존 본문 단언들이 그대로 동작하도록 본문만 반환한다. 모델명 검증은 summarize_meeting 을
+    # 직접 호출하는 별도 테스트(test_result_reports_successful_model)에서 다룬다.
+    return summarize_meeting(chunks, **kwargs).body
 
 
 def test_single_chunk_uses_single_shot_reduce_only():
@@ -214,6 +216,31 @@ def test_truncated_length_finish_reason_skips_retry_and_falls_back():
     assert [c["model"] for c in client.calls][-1] == "m2"  # 잘린 m1 버리고 m2 로 폴백
     # 재시도 스킵: m1 은 결정적 잘림이라 max_retries(3) 만큼 재시도하지 않고 단 한 번만 호출.
     assert len([c for c in client.calls if c["model"] == "m1"]) == 1
+
+
+def test_result_reports_successful_model():
+    # m1 이 일시 오류로 실패하고 m2 가 성공하면, 결과의 model 은 config 첫 모델(m1)이 아니라
+    # 실제 본문을 만든 m2 여야 한다(리포트에 정확한 모델명을 남기기 위함).
+    def handler(kwargs):
+        if kwargs["model"] == "m1":
+            raise RuntimeError("429 rate limit")
+        return "## 핵심 요약\n- ok"
+
+    client = FakeClient(handler)
+    result = summarize_meeting(
+        [_chunk(0, "회의")],
+        config=_config(models=("m1", "m2"), max_retries=2),
+        api_key="test",
+        map_template="MAP:{chunk_text}",
+        reduce_template="REDUCE:{partial_summaries}",
+        single_shot_max_chars=5,
+        client=client,
+        sleep_fn=NO_SLEEP,
+    )
+
+    assert isinstance(result, SummaryResult)
+    assert result.model == "m2"
+    assert "핵심 요약" in result.body
 
 
 def test_reasoning_exclude_passed_in_extra_body():

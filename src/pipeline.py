@@ -64,7 +64,7 @@ def run_pipeline(
     chunks = chunk_segments(segments, config.chunking)
     logger.info("청킹 완료: 청크 %d개", len(chunks))
 
-    summary_body = summarize_meeting(
+    summary = summarize_meeting(
         chunks,
         config=config.summarize,
         api_key=config.api_key,
@@ -73,7 +73,7 @@ def run_pipeline(
         single_shot_max_chars=config.chunking.single_shot_max_chars,
     )
 
-    report = render_report(summary_body, _build_meta(input_path, segments, chunks, config))
+    report = render_report(summary.body, _build_meta(input_path, segments, chunks, config, summary.model))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(report, encoding="utf-8")
     logger.info("리포트 생성 완료: %s", output_path)
@@ -112,6 +112,7 @@ def _build_meta(
     segments: list[Segment],
     chunks: list[Chunk],
     config: PipelineConfig,
+    model: str,
 ) -> ReportMeta:
     """리포트 메타데이터를 조립한다."""
     duration = segments[-1].end if segments else 0.0
@@ -121,6 +122,7 @@ def _build_meta(
         segment_count=len(segments),
         chunk_count=len(chunks),
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        model=model,
     )
 
 
