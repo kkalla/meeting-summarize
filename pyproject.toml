@@ -1,6 +1,6 @@
 [project]
 name = "meeting-summarize"
-version = "2.0.0"
+version = "2.0.1"
 description = "로컬 STT(whisper.cpp) + OpenRouter 무료티어로 회의 녹음을 구조화 요약하는 개인용 CLI 파이프라인"
 readme = "README.md"
 requires-python = ">=3.11"
