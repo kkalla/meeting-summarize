@@ -1,10 +1,11 @@
 # 회의 요약 파이프라인
 
+[![CI](https://github.com/kkalla/meeting-summarize/actions/workflows/ci.yml/badge.svg)](https://github.com/kkalla/meeting-summarize/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-000000?logo=apple&logoColor=white)](https://www.apple.com/mac/)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Release](https://img.shields.io/github/v/release/kkalla/meeting-summarize)](https://github.com/kkalla/meeting-summarize/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/kkalla/meeting-summarize)](LICENSE)
-[![Linting: Ruff](https://img.shields.io/badge/linting-ruff-261230?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
+[![Lint: flake8](https://img.shields.io/badge/lint-flake8-4B8BBE)](https://flake8.pycqa.org/)
 [![Code style: Black](https://img.shields.io/badge/code%20style-black-000000)](https://github.com/psf/black)
 
 개인 회의 녹음 파일 하나를 넣으면 **로컬 STT(whisper.cpp) + OpenRouter 무료티어 LLM**으로

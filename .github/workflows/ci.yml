@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 동시에 같은 ref 가 돌면 옛 실행을 취소(중복 CI 비용 절감).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint + test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # whisper.cpp/모델 같은 외부 바이너리는 단위 테스트에서 subprocess 를 모킹하므로
+      # CI 에선 받지 않는다(테스트는 vendor/ 의존성 없이 통과). 파이썬 의존성만 설치.
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Format check (black)
+        run: uv run black --check .
+
+      - name: Import order check (isort)
+        run: uv run isort --check-only .
+
+      - name: Lint (flake8)
+        run: uv run flake8 .
+
+      - name: Test (pytest)
+        run: uv run pytest
