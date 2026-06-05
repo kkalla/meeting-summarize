@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  회의 요약 watcher 를 macOS launchd LaunchAgent 로 상시 실행한다(도커 대체).
+  - RunAtLoad: 로그인 시 자동 시작
+  - KeepAlive: 프로세스가 죽으면 자동 재시작(도커 restart:unless-stopped 와 동일)
+  - whisper.cpp 는 호스트 Metal 빌드를 그대로 쓰므로 GPU 가속(RTF~0.6)이 적용된다.
+
+  설치:
+    cp deploy/com.max.meeting-watcher.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.max.meeting-watcher.plist
+  로그 확인:
+    tail -f logs/watcher.log
+  중지/해제:
+    launchctl unload -w ~/Library/LaunchAgents/com.max.meeting-watcher.plist
+
+  주의: 경로가 /Users/max/00_Projects/01_meeting_summarize_automation 로 하드코딩돼 있다.
+        프로젝트를 옮기면 아래 4개 절대경로를 함께 수정한다.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.max.meeting-watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/max/00_Projects/01_meeting_summarize_automation/.venv/bin/python</string>
+        <string>scripts/run_watcher.py</string>
+        <string>-c</string>
+        <string>configs/pipeline.yaml</string>
+    </array>
+
+    <!-- load_dotenv()·상대경로(data/, vendor/)가 이 디렉토리 기준으로 풀린다. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/max/00_Projects/01_meeting_summarize_automation</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- run_watcher.py 의 `from src...` 임포트를 위해 프로젝트 루트를 모듈 경로에 둔다. -->
+        <key>PYTHONPATH</key>
+        <string>/Users/max/00_Projects/01_meeting_summarize_automation</string>
+        <!-- launchd 는 최소 PATH 만 주므로 ffmpeg(/opt/homebrew/bin) 를 명시한다. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- 로그가 버퍼링 없이 즉시 파일에 찍히게 한다. -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- 설정 오류로 즉시 종료(exit 1)할 때 재시작 폭주를 막는 최소 간격(초). -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/max/00_Projects/01_meeting_summarize_automation/logs/watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/max/00_Projects/01_meeting_summarize_automation/logs/watcher.err.log</string>
+</dict>
+</plist>

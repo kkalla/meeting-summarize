@@ -24,6 +24,9 @@ out/
 # watcher 입출력 폴더 (compose 볼륨 마운트 대상)
 data/
 
+# launchd watcher 로그 (StandardOutPath/ErrorPath)
+logs/
+
 # BMAD 프레임워크 스캐폴딩 (도구 설치물 — 프로젝트 코드 아님)
 _bmad/
 .claude/

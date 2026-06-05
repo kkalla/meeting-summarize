@@ -23,4 +23,4 @@ services:
       # 전사 결과 캐시(issue #5). 후속 단계 실패 후 재처리 시 전사 스킵에 재사용.
       - ./data/transcripts:/data/transcripts
       # 모델(.bin)은 플랫폼 독립이라 호스트 빌드본을 컨테이너 빌드 경로에 그대로 마운트.
-      - ./vendor/whisper.cpp/models/ggml-large-v3-turbo.bin:/app/vendor/whisper.cpp/models/ggml-large-v3-turbo.bin:ro
+      - ./vendor/whisper.cpp/models/ggml-large-v3.bin:/app/vendor/whisper.cpp/models/ggml-large-v3.bin:ro

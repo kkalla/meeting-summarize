@@ -45,10 +45,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """watcher 데몬을 실행한다. 정상 종료 시 0, 설정 오류 시 1 을 반환한다."""
     args = _parse_args(argv)
+    # 앱 로그는 stdout 으로 보낸다. logging 기본은 stderr 라, 그대로 두면 launchd 의
+    # StandardErrorPath(watcher.err.log)에 INFO 까지 전부 쌓이고 watcher.log 는 빈다.
+    # 이렇게 하면 watcher.log = 앱 로그 전부, watcher.err.log = 인터프리터 크래시 등 진짜 비정상.
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        stream=sys.stdout,
     )
     log = logging.getLogger(__name__)
 

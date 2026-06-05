@@ -1,0 +1,9 @@
+# 전부 제외하고 Containerfile 이 COPY 하는 것만 화이트리스트로 되돌린다.
+# (vendor/ 2.9G·.venv·data 등이 build context 로 전송되던 문제 해결)
+*
+
+# Containerfile COPY 대상만 다시 포함.
+!src/
+!scripts/
+!configs/
+!prompts/
