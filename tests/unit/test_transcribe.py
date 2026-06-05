@@ -93,6 +93,26 @@ def test_run_whisper_omits_prompt_flag_when_empty(tmp_path, captured_whisper_cmd
     assert "--prompt" not in captured_whisper_cmd["cmd"]
 
 
+def test_run_whisper_decodes_subprocess_output_with_replace(tmp_path, monkeypatch):
+    # whisper-cli 는 진행 로그를 stderr 로 내보내는데 한글이 byte 토큰으로 쪼개지면
+    # invalid UTF-8 바이트가 섞인다. text=True 의 strict 디코딩이면 communicate()
+    # 단계에서 UnicodeDecodeError 로 죽으므로, subprocess.run 이 errors="replace"
+    # (+ encoding="utf-8") 로 호출되는지 검증해 회귀를 막는다.
+    prefix = _whisper_json(tmp_path)
+    captured: dict = {}
+
+    def fake_run(cmd, *_a, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+
+    _run_whisper(tmp_path / "a.wav", prefix, _stt_config())
+
+    assert captured.get("errors") == "replace"
+    assert captured.get("encoding") == "utf-8"
+
+
 # --- _run_whisper 예외 래핑 ------------------------------------------------
 
 

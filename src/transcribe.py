@@ -246,6 +246,12 @@ def _run_whisper(
             cmd,
             capture_output=True,
             text=True,
+            # whisper-cli 는 진행 로그를 stderr 로 내보내는데, 한글이 byte 토큰으로
+            # 쪼개지면 문자 경계 중간에서 잘린 invalid UTF-8 바이트가 섞일 수 있다.
+            # strict 디코딩이면 communicate() 단계에서 UnicodeDecodeError 로 죽으므로
+            # 깨진 바이트만 치환하고 진행한다(stdout/stderr 는 로깅 용도로만 쓴다).
+            encoding="utf-8",
+            errors="replace",
             timeout=config.timeout_sec,
             check=False,
         )
