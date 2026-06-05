@@ -184,6 +184,9 @@ class WatcherConfig:
     poll_interval_sec: int
     stability_checks: int
     extensions: tuple[str, ...]
+    # 처리 완료/실패 시 macOS 시스템 알림을 띄울지. macOS 외에서는 자동 no-op 이라
+    # true 여도 무해하다. 기본값을 둬 기존 설정/직접 생성(테스트)과 호환.
+    notify: bool = True
 
     def __post_init__(self) -> None:
         # 다른 config dataclass 와 동일하게 불변식을 타입이 소유한다. 직접 생성(테스트·
@@ -358,4 +361,5 @@ def _build_watcher_config(watch_raw: dict) -> WatcherConfig:
         poll_interval_sec=int(watch_raw["poll_interval_sec"]),
         stability_checks=int(watch_raw["stability_checks"]),
         extensions=tuple(str(ext).lower() for ext in watch_raw["extensions"]),
+        notify=bool(watch_raw.get("notify", True)),
     )

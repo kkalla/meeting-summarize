@@ -19,7 +19,9 @@ def _write_report(inp: Path, out: Path, cfg: object) -> None:
     out.write_text("# 회의 요약\n", encoding="utf-8")
 
 
-def _wcfg(tmp_path: Path, stability_checks: int = 2) -> WatcherConfig:
+def _wcfg(tmp_path: Path, stability_checks: int = 2, notify: bool = False) -> WatcherConfig:
+    # notify 는 기본 False — 테스트가 macOS 에서 실제 알림을 띄우지 않게 한다.
+    # 알림 동작 자체는 notify 를 monkeypatch 하는 전용 테스트에서 검증한다.
     return WatcherConfig(
         inbox_dir=tmp_path / "inbox",
         processed_dir=tmp_path / "processed",
@@ -28,6 +30,7 @@ def _wcfg(tmp_path: Path, stability_checks: int = 2) -> WatcherConfig:
         poll_interval_sec=1,
         stability_checks=stability_checks,
         extensions=(".m4a", ".wav"),
+        notify=notify,
     )
 
 
@@ -80,6 +83,52 @@ def test_stable_file_is_processed_and_moved_to_processed(watcher, monkeypatch):
     assert (watcher._wcfg.processed_dir / "meeting.m4a").exists()
     assert len(calls) == 1
     assert calls[0][1] == watcher._wcfg.output_dir / "meeting.md"
+
+
+def test_success_sends_notification(tmp_path, monkeypatch):
+    # notify=True 일 때 처리 완료 시 성공 알림이 enabled=True 로 호출돼야 한다.
+    sent: list[tuple] = []
+    monkeypatch.setattr("src.watcher.notify", lambda title, message, **kw: sent.append((title, message, kw)))
+
+    def _fake_pipeline(inp: Path, out: Path, cfg: object) -> None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("# 회의 요약\n내용", encoding="utf-8")
+
+    monkeypatch.setattr("src.watcher.run_pipeline", _fake_pipeline)
+    config = SimpleNamespace(watcher=_wcfg(tmp_path, notify=True), cache=_ccfg(tmp_path))
+    instance = FolderWatcher(config, "configs/pipeline.yaml")
+    instance._ensure_dirs()
+    audio = _touch(instance._wcfg.inbox_dir / "talk.m4a")
+
+    instance._process_file(audio)
+
+    assert len(sent) == 1
+    title, message, kw = sent[0]
+    assert title == "회의 요약 완료"
+    assert "talk.m4a" in message
+    assert kw.get("enabled") is True
+
+
+def test_failure_sends_notification(tmp_path, monkeypatch):
+    # 파이프라인 실패 시 실패 알림이 사유와 함께 호출돼야 한다.
+    sent: list[tuple] = []
+    monkeypatch.setattr("src.watcher.notify", lambda title, message, **kw: sent.append((title, message, kw)))
+
+    def boom(inp: Path, out: Path, cfg: object) -> None:
+        raise PipelineError("전사 실패")
+
+    monkeypatch.setattr("src.watcher.run_pipeline", boom)
+    config = SimpleNamespace(watcher=_wcfg(tmp_path, notify=True), cache=_ccfg(tmp_path))
+    instance = FolderWatcher(config, "configs/pipeline.yaml")
+    instance._ensure_dirs()
+    audio = _touch(instance._wcfg.inbox_dir / "talk.m4a")
+
+    instance._process_file(audio)
+
+    assert len(sent) == 1
+    title, message, _kw = sent[0]
+    assert title == "회의 요약 실패"
+    assert "전사 실패" in message
 
 
 def test_growing_file_is_not_processed(watcher, monkeypatch):

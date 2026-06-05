@@ -93,6 +93,9 @@ watcher:
   processed_dir: "data/processed"
   failed_dir: "data/failed"
   output_dir: "data/output"
+  # 처리 완료/실패 시 macOS 시스템 알림(알림센터)을 띄운다. macOS 외(도커 리눅스 등)
+  # 에서는 자동으로 무시되므로 true 여도 무해하다. 처음 한 번 알림 권한 승인이 필요할 수 있다.
+  notify: true
   # 폴링 주기(초). 이 간격마다 inbox 를 스캔한다.
   poll_interval_sec: 10
   # 업로드 완료 판정: (size, mtime) 가 연속 이 횟수만큼 동일하면 "안정"으로 보고 처리.

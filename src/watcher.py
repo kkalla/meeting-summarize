@@ -17,6 +17,7 @@ from pathlib import Path
 from src.cache import purge_expired
 from src.config import PipelineConfig, WatcherConfig
 from src.exceptions import PipelineError
+from src.notify import notify
 from src.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
@@ -184,19 +185,23 @@ class FolderWatcher:
             # 예상된 도메인 실패(전사/요약/입력 누락). 파일만 failed 로 옮기고 계속 진행.
             logger.error("처리 실패: %s (%s)", path.name, exc)
             self._relocate(path, self._wcfg.failed_dir, "실패")
+            self._notify_failure(path, str(exc))
         except Exception:  # noqa: BLE001 - 데몬 생존이 우선: 어떤 파일도 루프를 죽이면 안 됨
             # 예상치 못한 예외(SDK 오류 등)도 삼키지 말고 traceback 을 남긴 뒤 failed 로.
             # 그대로 전파시키면 스캔 루프가 죽고 restart 정책상 같은 파일을 무한 재시도한다.
             logger.exception("예상치 못한 오류로 처리 실패: %s", path.name)
             self._relocate(path, self._wcfg.failed_dir, "실패")
+            self._notify_failure(path, "예상치 못한 오류 (로그 확인)")
         else:
             # run_pipeline 이 조용히 빈/누락 리포트를 남겼을 수 있으므로 산출물을 검증한다.
             # 검증 없이 processed 로 옮기면 원본이 inbox 에서 사라져 복구·재처리가 불가능하다.
             if self._output_ok(output_path):
                 self._relocate(path, self._wcfg.processed_dir, "완료", report=output_path)
+                self._notify_success(path, output_path)
             else:
                 logger.error("출력 리포트가 없거나 비어 있음: %s — failed 로 격리", output_path)
                 self._relocate(path, self._wcfg.failed_dir, "실패(빈 출력)")
+                self._notify_failure(path, "출력 리포트가 비어 있음")
         finally:
             self._snapshots.pop(path, None)
             self._stable_counts.pop(path, None)
@@ -207,6 +212,24 @@ class FolderWatcher:
             return output_path.is_file() and output_path.stat().st_size > 0
         except OSError:
             return False
+
+    def _notify_success(self, path: Path, report: Path) -> None:
+        """처리 완료를 시스템 알림으로 알린다(설정 off 면 no-op)."""
+        notify(
+            "회의 요약 완료",
+            f"{path.name} → {report.name}",
+            sound="Glass",
+            enabled=self._wcfg.notify,
+        )
+
+    def _notify_failure(self, path: Path, reason: str) -> None:
+        """처리 실패를 시스템 알림으로 알린다(설정 off 면 no-op)."""
+        notify(
+            "회의 요약 실패",
+            f"{path.name}: {reason}",
+            sound="Basso",
+            enabled=self._wcfg.notify,
+        )
 
     def _relocate(self, path: Path, dest_dir: Path, label: str, *, report: Path | None = None) -> None:
         """파일을 옮기고 결과를 로깅한다. 이동이 영구 실패하면 격리한다.
