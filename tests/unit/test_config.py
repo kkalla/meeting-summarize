@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from src.config import (
+    MAX_STT_PROMPT_CHARS,
     CacheConfig,
     ChunkingConfig,
     ConfidenceGate,
@@ -48,6 +49,45 @@ def test_build_config_missing_cache_section_defaults_disabled():
     raw = _raw()  # cache 키 없음
     cfg = _build_config(raw, api_key="k")
     assert cfg.cache.enabled is False
+
+
+def test_build_config_parses_stt_prompt_and_strips():
+    raw = _raw()
+    raw["stt"]["prompt"] = "  비식별화, 밸리데이트  "
+    cfg = _build_config(raw, api_key="k")
+    assert cfg.stt.prompt == "비식별화, 밸리데이트"  # 앞뒤 공백 제거
+
+
+def test_build_config_stt_prompt_defaults_empty_when_missing():
+    raw = _raw()  # stt.prompt 키 없음(기존 설정 파일 하위호환)
+    cfg = _build_config(raw, api_key="k")
+    assert cfg.stt.prompt == ""
+
+
+@pytest.mark.parametrize("bad_prompt", [True, None, ["용어"], 123])
+def test_build_config_rejects_non_string_prompt(bad_prompt):
+    # 비문자열 YAML(prompt: true/null/리스트)을 str() 로 조용히 "True"/"None" 으로 덮지 않고
+    # 명시적으로 거부해야 한다(깨진 용어집이 whisper 에 주입되는 것 방지).
+    raw = _raw()
+    raw["stt"]["prompt"] = bad_prompt
+    with pytest.raises(DependencyError):
+        _build_config(raw, api_key="k")
+
+
+def test_build_config_rejects_overlong_prompt():
+    raw = _raw()
+    raw["stt"]["prompt"] = "가" * (MAX_STT_PROMPT_CHARS + 1)  # 상한 초과
+    with pytest.raises(DependencyError):
+        _build_config(raw, api_key="k")
+
+
+def test_build_config_accepts_prompt_at_exact_limit():
+    # 상한은 포함 경계(> 로 검사)이므로 정확히 MAX 자는 통과해야 한다.
+    # > 가 >= 로 바뀌는 off-by-one 회귀를 잡는다.
+    raw = _raw()
+    raw["stt"]["prompt"] = "가" * MAX_STT_PROMPT_CHARS
+    cfg = _build_config(raw, api_key="k")
+    assert len(cfg.stt.prompt) == MAX_STT_PROMPT_CHARS
 
 
 def _raw() -> dict:
@@ -130,6 +170,31 @@ def _stt(**overrides):
 def test_stt_config_rejects_non_positive_rtf_estimate(rtf):
     with pytest.raises(DependencyError):
         SttConfig(**_stt(rtf_estimate=rtf))
+
+
+def test_stt_config_strips_prompt_on_direct_construction():
+    # 불변식이 로딩 경로가 아니라 타입(__post_init__)에 있으므로, SttConfig 를 직접
+    # 생성해도 앞뒤 공백이 제거된다(공백차만 다른 프롬프트가 다른 캐시 지문을 내지 않게).
+    cfg = SttConfig(**_stt(prompt="  비식별화  "))
+    assert cfg.prompt == "비식별화"
+
+
+def test_stt_config_rejects_non_string_prompt_on_direct_construction():
+    with pytest.raises(DependencyError):
+        SttConfig(**_stt(prompt=True))
+
+
+def test_stt_config_whitespace_only_prompt_normalises_to_empty():
+    # 공백만 있는 프롬프트는 strip 후 ""가 되어, transcribe 의 `if config.prompt:`
+    # 게이트에서 falsy 로 걸러진다(--prompt "   " 가 whisper 에 주입되지 않게).
+    cfg = SttConfig(**_stt(prompt="   "))
+    assert cfg.prompt == ""
+
+
+def test_stt_config_rejects_overlong_prompt_on_direct_construction():
+    # 길이 불변식도 로딩 경로가 아니라 타입(__post_init__)이 소유하므로 직접 생성에서도 거부된다.
+    with pytest.raises(DependencyError):
+        SttConfig(**_stt(prompt="가" * (MAX_STT_PROMPT_CHARS + 1)))
 
 
 # --- ChunkingConfig -------------------------------------------------------

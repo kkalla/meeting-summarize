@@ -18,9 +18,12 @@ from src.exceptions import CacheError
 from src.transcribe import Segment
 
 
-def _stt(model_path: str = "ggml-large-v3-turbo.bin", language: str = "ko"):
-    """compute_key 가 보는 최소 STT 설정 더블 (model_path/language 만 읽는다)."""
-    return SimpleNamespace(model_path=model_path, language=language)
+def _stt(model_path: str = "ggml-large-v3-turbo.bin", language: str = "ko", prompt: str = ""):
+    """compute_key 가 보는 최소 STT 설정 더블 (model_path/language/prompt 를 읽는다).
+
+    prompt 는 실제 SttConfig 와 동일하게 항상 존재한다(_stt_fingerprint 가 직접 접근).
+    """
+    return SimpleNamespace(model_path=model_path, language=language, prompt=prompt)
 
 
 def test_compute_key_same_content_same_key(tmp_path):
@@ -51,6 +54,14 @@ def test_compute_key_different_language_different_key(tmp_path):
     a = tmp_path / "a.bin"
     a.write_bytes(b"hello world" * 1000)
     assert cache.compute_key(a, _stt(language="ko")) != cache.compute_key(a, _stt(language="en"))
+
+
+def test_compute_key_different_prompt_different_key(tmp_path):
+    # 같은 오디오·모델·언어라도 초기 프롬프트(용어집)가 다르면 키가 달라야 한다
+    # (프롬프트가 전사 출력을 바꾸므로 옛 전사 재사용을 막아야 한다).
+    a = tmp_path / "a.bin"
+    a.write_bytes(b"hello world" * 1000)
+    assert cache.compute_key(a, _stt(prompt="용어집 A")) != cache.compute_key(a, _stt(prompt="용어집 B"))
 
 
 def test_compute_key_missing_file_raises(tmp_path):

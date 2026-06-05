@@ -11,17 +11,26 @@ stt:
   # whisper-cli 실행 파일. setup.sh 가 빌드하는 기본 경로(상대경로는 프로젝트 루트 기준).
   # PATH에 등록했다면 "whisper-cli" 로 바꿔도 됨.
   whisper_cli: "vendor/whisper.cpp/build/bin/whisper-cli"
-  # large-v3-turbo 모델(ggml) 경로. setup.sh 가 받아둔 위치(루트 기준 상대경로).
-  model_path: "vendor/whisper.cpp/models/ggml-large-v3-turbo.bin"
-  # 전사 언어(ISO 639-1). 한국어 회의 기준.
+  # large-v3 (full) 모델(ggml) 경로. turbo 대비 한국어 인식 정확도가 높다(디코더 32레이어).
+  # 모델 받기: bash vendor/whisper.cpp/models/download-ggml-model.sh large-v3
+  # 속도/용량 절충이 필요하면 ggml-large-v3-q5_0.bin (양자화) 도 가능.
+  model_path: "vendor/whisper.cpp/models/ggml-large-v3.bin"
+  # 전사 언어(ISO 639-1). 한국어로 명시하면 auto-detect 보다 정확도가 올라간다(한국어 회의 기준).
   language: "ko"
   # whisper-cli subprocess 타임아웃(초). 긴 회의 대비 넉넉하게.
   timeout_sec: 3600
   # 전사 예상시간 추정용 RTF(real-time factor): 예상 소요 = 오디오길이(초) × rtf_estimate.
   # 시작 로그에 "예상 ~N초" 를 찍는 휴리스틱이며 전사 자체에는 영향 없음.
-  # large-v3-turbo 기준 대략값. 첫 전사 후 실제(전사완료 로그) 대비 보정 권장
+  # large-v3 (full) 기준 대략값(turbo보다 3~5배 느림). 첫 전사 후 실제(전사완료 로그) 대비 보정 권장
   # (Apple Silicon Metal 가속이면 더 작게, CPU-only 면 더 크게).
-  rtf_estimate: 0.2
+  rtf_estimate: 0.6
+  # whisper 초기 프롬프트(initial prompt): 자주 나오는 도메인 용어·고유명사를 미리 알려줘
+  # 한국어 전문용어 오인식(예: "비식별화"→"비식별아", "다국어"→"다구건")을 줄인다.
+  # 쉼표 나열형(아래 예시)이든 한 문장형이든 모두 동작하니 도메인이 바뀌면 용어만 갈아끼운다.
+  # 앞뒤 공백은 자동 제거되고, 비우거나("") 공백만 있으면 --prompt 를 넘기지 않는다.
+  # 주의: 길이 상한 2000자(초과 시 로딩 실패). 너무 길거나 무음이 많으면 프롬프트 단어가
+  # 환각으로 새어 나올 수 있으니 핵심 용어 위주로 간결하게 유지한다.
+  prompt: "이 회의는 AI OCR, 비식별화, 밸리데이트(validate), 액티브러닝, 비주얼 그라운딩, 분류기(classifier), 디지타이저, 로테이션 모델, 토큰 ID 예측, 하이브리드 모델, 다국어, 광주은행, 오토메이션 서브모듈, MVP 같은 머신러닝·제품 개발 용어를 다룬다."
   # 무음/환각 신뢰도 게이트.
   confidence_gate:
     # 세그먼트 no_speech_prob 가 이 값을 넘으면 무음으로 간주.
