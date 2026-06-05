@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src import pipeline
+from src import pipeline, rtf_calibration
 from src.config import CacheConfig
 from src.transcribe import Segment
 
@@ -46,7 +46,7 @@ def test_cache_miss_transcribes_and_stores(monkeypatch, tmp_path):
     cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=True))
     monkeypatch.setattr(pipeline.cache, "compute_key", lambda p, stt: "key1")
     monkeypatch.setattr(pipeline.cache, "load", lambda d, k: None)
-    monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt: _seg())
+    monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt, rtf_state=None: _seg())
     stored = {}
     monkeypatch.setattr(
         pipeline.cache,
@@ -61,6 +61,24 @@ def test_cache_miss_transcribes_and_stores(monkeypatch, tmp_path):
     assert stored["source_name"] == "in.qta"  # 원본 파일명이 캐시 메타로 전달된다
 
 
+def test_transcribe_receives_rtf_state_path(monkeypatch, tmp_path):
+    # Arrange: 보정 상태 경로가 transcripts_dir 안에 만들어져 transcribe 로 전달돼야 한다.
+    cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=True))
+    monkeypatch.setattr(pipeline.cache, "compute_key", lambda p, stt: "key1")
+    monkeypatch.setattr(pipeline.cache, "load", lambda d, k: None)
+    monkeypatch.setattr(pipeline.cache, "store", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setattr(
+        pipeline, "transcribe", lambda wav, stt, rtf_state=None: captured.update(rtf_state=rtf_state) or _seg()
+    )
+
+    # Act
+    pipeline._transcribe_or_load(Path("in.qta"), Path("in.wav"), cfg)
+
+    # Assert
+    assert captured["rtf_state"] == rtf_calibration.state_path(tmp_path)
+
+
 def test_cache_disabled_always_transcribes(monkeypatch, tmp_path):
     cfg = _Cfg(CacheConfig(transcripts_dir=tmp_path, ttl_hours=168, enabled=False))
 
@@ -68,7 +86,7 @@ def test_cache_disabled_always_transcribes(monkeypatch, tmp_path):
         raise AssertionError("disabled 인데 compute_key 가 호출됨")
 
     monkeypatch.setattr(pipeline.cache, "compute_key", _no_key)
-    monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt: _seg())
+    monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt, rtf_state=None: _seg())
 
     out = pipeline._transcribe_or_load(Path("in.qta"), Path("in.wav"), cfg)
     assert out == _seg()
@@ -83,7 +101,7 @@ def test_compute_key_failure_falls_back_to_transcribe(monkeypatch, tmp_path):
         raise CacheError("못 읽음")
 
     monkeypatch.setattr(pipeline.cache, "compute_key", _raise)
-    monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt: _seg())
+    monkeypatch.setattr(pipeline, "transcribe", lambda wav, stt, rtf_state=None: _seg())
 
     out = pipeline._transcribe_or_load(Path("in.qta"), Path("in.wav"), cfg)
     assert out == _seg()

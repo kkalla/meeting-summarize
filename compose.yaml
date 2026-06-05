@@ -15,7 +15,9 @@ services:
     env_file:
       - .env
     volumes:
-      # 입출력 폴더 — 호스트 data/ 를 컨테이너 /data 경로(config 기본값)에 마운트.
+      # 입출력 폴더 — 호스트 data/ 를 컨테이너 /data 경로에 마운트.
+      # 주의: pipeline.yaml 의 경로 기본값은 호스트 launchd 용 상대경로(data/)다. 컨테이너로
+      # 돌리려면 watcher/cache 경로를 컨테이너 절대경로(/data/...)로 오버라이드해야 한다.
       - ./data/inbox:/data/inbox
       - ./data/processed:/data/processed
       - ./data/failed:/data/failed
@@ -23,4 +25,4 @@ services:
       # 전사 결과 캐시(issue #5). 후속 단계 실패 후 재처리 시 전사 스킵에 재사용.
       - ./data/transcripts:/data/transcripts
       # 모델(.bin)은 플랫폼 독립이라 호스트 빌드본을 컨테이너 빌드 경로에 그대로 마운트.
-      - ./vendor/whisper.cpp/models/ggml-large-v3-turbo.bin:/app/vendor/whisper.cpp/models/ggml-large-v3-turbo.bin:ro
+      - ./vendor/whisper.cpp/models/ggml-large-v3.bin:/app/vendor/whisper.cpp/models/ggml-large-v3.bin:ro

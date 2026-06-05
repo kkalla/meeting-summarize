@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from src import cache
+from src import cache, rtf_calibration
 from src.audio import convert_to_wav
 from src.chunking import Chunk, chunk_segments
 from src.config import PROJECT_ROOT, PipelineConfig, load_config
@@ -87,20 +87,22 @@ def _transcribe_or_load(input_path: Path, wav_path: Path, config: PipelineConfig
     영향 없는 최적화 — 어떤 캐시 실패도 전사 자체를 막지 않는다).
     """
     cache_cfg = config.cache
+    # 보정 상태는 전사 캐시와 같은 디렉토리에 둔다(캐시 활성화 여부와 무관하게 ETA 보정).
+    rtf_state = rtf_calibration.state_path(cache_cfg.transcripts_dir)
     if not cache_cfg.enabled:
-        return transcribe(wav_path, config.stt)
+        return transcribe(wav_path, config.stt, rtf_state)
     try:
         key = cache.compute_key(input_path, config.stt)
     except CacheError as exc:
         logger.warning("캐시 키 계산 실패 — 캐시 없이 전사: %s", exc)
-        return transcribe(wav_path, config.stt)
+        return transcribe(wav_path, config.stt, rtf_state)
 
     cached = cache.load(cache_cfg.transcripts_dir, key)
     if cached is not None:
         logger.info("전사 캐시 HIT — 전사 스킵 (세그먼트 %d개)", len(cached))
         return cached
 
-    segments = transcribe(wav_path, config.stt)
+    segments = transcribe(wav_path, config.stt, rtf_state)
     cache.store(cache_cfg.transcripts_dir, key, segments, source_name=input_path.name)
     return segments
 

@@ -21,8 +21,9 @@ stt:
   timeout_sec: 3600
   # 전사 예상시간 추정용 RTF(real-time factor): 예상 소요 = 오디오길이(초) × rtf_estimate.
   # 시작 로그에 "예상 ~N초" 를 찍는 휴리스틱이며 전사 자체에는 영향 없음.
-  # large-v3 (full) 기준 대략값(turbo보다 3~5배 느림). 첫 전사 후 실제(전사완료 로그) 대비 보정 권장
-  # (Apple Silicon Metal 가속이면 더 작게, CPU-only 면 더 크게).
+  # 이 값은 첫 전사(콜드 스타트)용 초기값일 뿐이다 — 이후엔 실측 RTF 가 EMA 로 자동
+  # 누적(data/transcripts/.rtf_state)되어 다음 전사 ETA 가 실제 하드웨어에 수렴한다.
+  # large-v3 (full) 대략값: Metal 가속이면 ~0.6, 도커 CPU-only 면 ~2.8 (실측 2.82 기준).
   rtf_estimate: 0.6
   # whisper 초기 프롬프트(initial prompt): 자주 나오는 도메인 용어·고유명사를 미리 알려줘
   # 한국어 전문용어 오인식(예: "비식별화"→"비식별아", "다국어"→"다구건")을 줄인다.
@@ -70,7 +71,7 @@ summarize:
   request_timeout_sec: 120
   # 생성 토큰 상한. reasoning 모델은 사고과정(<think>)도 이 예산을 쓰므로 넉넉히 둔다.
   # 너무 작으면 사고하다 본문이 잘려(finish_reason=length) 사고과정만 저장되는 사고가 난다.
-  max_tokens: 8192
+  max_tokens: 16384
   temperature: 0.3
   # Map 단계 허용 누락률(%). 0 이면 청크 하나라도 실패 시 전체 실패.
   max_chunk_failure_pct: 0
@@ -78,20 +79,20 @@ summarize:
 cache:
   # 전사 결과 캐시. 전사 성공분을 원본 오디오 SHA-256 키로 보관해, 요약 등 후속
   # 단계 실패 후 재처리 시 전사(가장 비싼 단계)를 건너뛴다. (issue #5)
-  # 디렉토리는 컨테이너 기준 절대경로가 기본(compose 에서 호스트 폴더를 마운트).
-  transcripts_dir: "/data/transcripts"
+  # 경로는 프로젝트 루트 기준 상대경로(호스트 launchd 실행). RTF 자동보정 상태(.rtf_state)도 여기 둔다.
+  transcripts_dir: "data/transcripts"
   # 이 시간이 지난 캐시는 watcher 스캔 시 삭제. 168h = 7일.
   ttl_hours: 168
   enabled: true
 
 watcher:
-  # 폴더 watcher 데몬 설정. podman 컨테이너 안에서 동작.
-  # 디렉토리는 컨테이너 기준 절대경로가 기본(compose 에서 호스트 폴더를 마운트).
+  # 폴더 watcher 데몬 설정. 호스트에서 launchd(LaunchAgent)로 상시 실행.
+  # 경로는 프로젝트 루트 기준 상대경로다(상대경로면 로더가 프로젝트 루트 기준으로 절대화). data/ 폴더를 그대로 쓴다.
   # 새 녹음파일이 inbox 에 올라오면 감지 -> 파이프라인 실행 -> processed/failed 로 이동.
-  inbox_dir: "/data/inbox"
-  processed_dir: "/data/processed"
-  failed_dir: "/data/failed"
-  output_dir: "/data/output"
+  inbox_dir: "data/inbox"
+  processed_dir: "data/processed"
+  failed_dir: "data/failed"
+  output_dir: "data/output"
   # 폴링 주기(초). 이 간격마다 inbox 를 스캔한다.
   poll_interval_sec: 10
   # 업로드 완료 판정: (size, mtime) 가 연속 이 횟수만큼 동일하면 "안정"으로 보고 처리.

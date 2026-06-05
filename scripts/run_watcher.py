@@ -1,7 +1,7 @@
 """CLI 진입점: 폴더 watcher 데몬을 실행한다.
 
 inbox 폴더를 폴링하다가 녹음파일이 올라오면 요약 파이프라인을 자동 실행한다.
-podman 컨테이너의 기본 실행 명령으로 쓰인다.
+호스트에서 launchd LaunchAgent 가 관리하는 데몬으로 상시 실행된다(도커 컨테이너에서도 동작).
 
 사용 예:
     uv run python scripts/run_watcher.py
@@ -45,10 +45,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """watcher 데몬을 실행한다. 정상 종료 시 0, 설정 오류 시 1 을 반환한다."""
     args = _parse_args(argv)
+    # 앱 로그는 stdout 으로 보낸다. logging 기본은 stderr 라, 그대로 두면 launchd 의
+    # StandardErrorPath(watcher.err.log)에 INFO 까지 전부 쌓이고 watcher.log 는 빈다.
+    # 이렇게 하면 watcher.log = 앱 로그 전부, watcher.err.log = 인터프리터 크래시 등 진짜 비정상.
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        stream=sys.stdout,
     )
     log = logging.getLogger(__name__)
 
@@ -73,8 +77,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         watcher.run()
-    except Exception:  # noqa: BLE001 - _ensure_dirs mkdir(볼륨 권한) 등 시작 실패를 깔끔히 종료
-        # 그대로 전파시키면 컨테이너가 비정상 종료 → restart 정책상 무한 재시작한다.
+    except Exception:  # noqa: BLE001 - _ensure_dirs mkdir(디렉토리 권한) 등 시작 실패를 깔끔히 종료
+        # 그대로 전파시키면 비정상 종료 → launchd KeepAlive(또는 도커 restart) 가 무한 재시작한다.
         log.exception("watcher 실행 중 치명적 오류")
         return 1
     return 0
