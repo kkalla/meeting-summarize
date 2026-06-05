@@ -15,7 +15,9 @@ services:
     env_file:
       - .env
     volumes:
-      # 입출력 폴더 — 호스트 data/ 를 컨테이너 /data 경로(config 기본값)에 마운트.
+      # 입출력 폴더 — 호스트 data/ 를 컨테이너 /data 경로에 마운트.
+      # 주의: pipeline.yaml 의 경로 기본값은 호스트 launchd 용 상대경로(data/)다. 컨테이너로
+      # 돌리려면 watcher/cache 경로를 컨테이너 절대경로(/data/...)로 오버라이드해야 한다.
       - ./data/inbox:/data/inbox
       - ./data/processed:/data/processed
       - ./data/failed:/data/failed

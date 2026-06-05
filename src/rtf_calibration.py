@@ -47,7 +47,8 @@ def update_rtf(path: Path, observed_rtf: float, fallback: float) -> float:
     Args:
         path: 상태 파일 경로.
         observed_rtf: 이번 전사의 실측 RTF(<=0 이면 무시하고 기존값/폴백 반환).
-        fallback: 상태가 없을 때 쓸 설정값.
+        fallback: 유효한 누적값이 없을 때 쓸 설정값(파일 없음/손상, 또는
+            observed_rtf<=0 인데 기존 상태도 없을 때).
     """
     if observed_rtf <= 0.0:
         return load_rtf(path, fallback)
@@ -81,7 +82,14 @@ def _read_state(path: Path) -> tuple[float, int] | None:
 
 
 def _write_state(path: Path, rtf: float, samples: int) -> None:
-    """상태를 atomic 하게 저장한다(부분 쓰기가 보이지 않도록 tmp→rename)."""
+    """상태를 원자적으로 저장한다(POSIX 로컬 FS 기준 — 부분 쓰기가 안 보이게 tmp→rename).
+
+    rtf<=0 같은 비정상 값은 저장하지 않는다. 읽기(_read_state)가 거르는 불변식을
+    쓰기 측에서도 강제해, 향후 다른 호출자가 잘못된 상태를 영속화하지 못하게 한다.
+    """
+    if rtf <= 0.0:
+        logger.warning("비정상 RTF(%.3f)는 저장하지 않습니다: %s", rtf, path)
+        return
     payload = {"rtf": round(rtf, 4), "samples": samples}
     tmp = path.with_name(f"{path.name}.tmp")
     try:

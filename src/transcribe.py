@@ -175,6 +175,8 @@ def transcribe(wav_path: Path, config: SttConfig, rtf_state_path: Path | None = 
     logger.info("whisper-cli 전사 종료: 실제 %.0f초 (오디오 %.0f초, RTF %.2f)", elapsed, duration, actual_rtf)
 
     # 실측 RTF 를 누적해 다음 전사 ETA 를 보정한다(표시 전용 — 실패해도 전사엔 무관).
+    # actual_rtf>0 은 update_rtf 도 내부에서 방어하지만, duration=0 등으로 0 일 때
+    # 무의미한 "실측 0.00 반영" 로그를 남기지 않으려 호출부에서도 거른다.
     if rtf_state_path is not None and actual_rtf > 0.0:
         new_rtf = rtf_calibration.update_rtf(rtf_state_path, actual_rtf, config.rtf_estimate)
         logger.info("RTF 보정: 다음 전사 예상에 RTF %.2f 적용(실측 %.2f 반영)", new_rtf, actual_rtf)

@@ -71,7 +71,7 @@ summarize:
   request_timeout_sec: 120
   # 생성 토큰 상한. reasoning 모델은 사고과정(<think>)도 이 예산을 쓰므로 넉넉히 둔다.
   # 너무 작으면 사고하다 본문이 잘려(finish_reason=length) 사고과정만 저장되는 사고가 난다.
-  max_tokens: 8192
+  max_tokens: 16384
   temperature: 0.3
   # Map 단계 허용 누락률(%). 0 이면 청크 하나라도 실패 시 전체 실패.
   max_chunk_failure_pct: 0
@@ -87,7 +87,7 @@ cache:
 
 watcher:
   # 폴더 watcher 데몬 설정. 호스트에서 launchd(LaunchAgent)로 상시 실행.
-  # 경로는 프로젝트 루트 기준 상대경로(_resolve_dir 가 절대화). data/ 폴더를 그대로 쓴다.
+  # 경로는 프로젝트 루트 기준 상대경로다(상대경로면 로더가 프로젝트 루트 기준으로 절대화). data/ 폴더를 그대로 쓴다.
   # 새 녹음파일이 inbox 에 올라오면 감지 -> 파이프라인 실행 -> processed/failed 로 이동.
   inbox_dir: "data/inbox"
   processed_dir: "data/processed"
