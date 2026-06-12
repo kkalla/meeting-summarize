@@ -4,6 +4,9 @@
 #   - whisper.cpp 클론 + Metal 가속 빌드 -> whisper-cli
 #   - ggml-large-v3 모델 다운로드 (한국어 정확도 우선; turbo 대비 느리지만 인식 품질↑)
 # 여러 번 실행해도 안전하도록, 이미 있는 단계는 건너뜁니다.
+#
+# 사용법: ./setup.sh [--rebuild]
+#   --rebuild  whisper-cli 강제 재빌드 (프로젝트 폴더 이동/이름 변경 후 rpath 가 깨졌을 때)
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +18,17 @@ WHISPER_CLI="${WHISPER_DIR}/build/bin/whisper-cli"
 
 log() { printf '\033[1;34m[setup]\033[0m %s\n' "$1"; }
 err() { printf '\033[1;31m[setup:error]\033[0m %s\n' "$1" >&2; }
+
+REBUILD=false
+for arg in "$@"; do
+  case "$arg" in
+    --rebuild) REBUILD=true ;;
+    *)
+      err "알 수 없는 옵션: ${arg} (사용법: ./setup.sh [--rebuild])"
+      exit 1
+      ;;
+  esac
+done
 
 # Homebrew 로 패키지 설치(멱등). brew 미설치면 중단.
 brew_install() {
@@ -44,8 +58,13 @@ else
   log "whisper.cpp 이미 클론됨 — 건너뜀"
 fi
 
+if [ "${REBUILD}" = true ] && [ -d "${WHISPER_DIR}/build" ]; then
+  log "--rebuild: 기존 빌드 삭제 중..."
+  rm -rf "${WHISPER_DIR}/build"
+fi
+
 if [ -x "${WHISPER_CLI}" ]; then
-  log "whisper-cli 이미 빌드됨 — 건너뜀"
+  log "whisper-cli 이미 빌드됨 — 건너뜀 (강제 재빌드는 --rebuild)"
 else
   log "whisper.cpp 빌드 중 (Metal 가속)..."
   cmake -B "${WHISPER_DIR}/build" -S "${WHISPER_DIR}" -DGGML_METAL=ON >/dev/null
