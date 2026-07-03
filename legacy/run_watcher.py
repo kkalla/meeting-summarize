@@ -3,9 +3,12 @@
 inbox 폴더를 폴링하다가 녹음파일이 올라오면 요약 파이프라인을 자동 실행한다.
 호스트에서 launchd LaunchAgent 가 관리하는 데몬으로 상시 실행된다(도커 컨테이너에서도 동작).
 
+**legacy**: 로컬 whisper.cpp 기반 CLI 파이프라인 전용 데몬. 현재 주력 사용법은 Slack 봇
+(``scripts/run_slack_bot.py``)이다.
+
 사용 예:
-    uv run python scripts/run_watcher.py
-    uv run python scripts/run_watcher.py -c configs/pipeline.yaml -v
+    uv run python legacy/run_watcher.py
+    uv run python legacy/run_watcher.py -c configs/pipeline.yaml -v
 """
 
 from __future__ import annotations
@@ -16,9 +19,9 @@ import signal
 import sys
 from types import FrameType
 
+from legacy.watcher import FolderWatcher
 from src.config import load_config
 from src.exceptions import DependencyError
-from src.watcher import FolderWatcher
 
 DEFAULT_CONFIG = "configs/pipeline.yaml"
 

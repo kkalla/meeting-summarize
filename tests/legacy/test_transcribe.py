@@ -7,9 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.config import ConfidenceGate, SttConfig
-from src.exceptions import TranscriptionError
-from src.transcribe import (
+from legacy.transcribe import (
     Segment,
     _run_whisper,
     apply_confidence_gate,
@@ -17,6 +15,8 @@ from src.transcribe import (
     parse_segments,
     transcribe,
 )
+from src.config import ConfidenceGate, SttConfig
+from src.exceptions import TranscriptionError
 
 
 def _gate(max_no_speech=0.6, min_avg_logprob=-1.0, min_valid_ratio=0.2) -> ConfidenceGate:
@@ -52,7 +52,7 @@ def _whisper_json(tmp_path):
 
 @pytest.fixture
 def captured_whisper_cmd(monkeypatch):
-    """src.transcribe.subprocess.run 을 가로채 호출 cmd 를 모아두는 fixture.
+    """legacy.transcribe.subprocess.run 을 가로채 호출 cmd 를 모아두는 fixture.
 
     반환 dict 의 ["cmd"] 로 _run_whisper 가 조립한 whisper-cli 인자 리스트를 검증한다.
     여러 cmd-검증 테스트가 공유하던 fake_run/captured/monkeypatch 보일러플레이트를 모은다.
@@ -63,7 +63,7 @@ def captured_whisper_cmd(monkeypatch):
         captured["cmd"] = cmd
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+    monkeypatch.setattr("legacy.transcribe.subprocess.run", fake_run)
     return captured
 
 
@@ -105,7 +105,7 @@ def test_run_whisper_decodes_subprocess_output_with_replace(tmp_path, monkeypatc
         captured.update(kwargs)
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+    monkeypatch.setattr("legacy.transcribe.subprocess.run", fake_run)
 
     _run_whisper(tmp_path / "a.wav", prefix, _stt_config())
 
@@ -121,7 +121,7 @@ def test_run_whisper_wraps_oserror_as_transcription_error(tmp_path, monkeypatch)
     def boom(*_args, **_kwargs):
         raise OSError("Permission denied")
 
-    monkeypatch.setattr("src.transcribe.subprocess.run", boom)
+    monkeypatch.setattr("legacy.transcribe.subprocess.run", boom)
     config = _stt_config()
 
     # Act / Assert: 원시 OSError 가 아니라 TranscriptionError 로 변환되어야 한다
@@ -142,7 +142,7 @@ def test_run_whisper_tolerates_non_utf8_bytes_in_token_text(tmp_path, monkeypatc
     def fake_run(*_args, **_kwargs):
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("src.transcribe.subprocess.run", fake_run)
+    monkeypatch.setattr("legacy.transcribe.subprocess.run", fake_run)
     config = _stt_config()
 
     # Act: invalid byte 가 있어도 파싱이 깨지지 않아야 한다
@@ -163,13 +163,13 @@ def test_run_whisper_logs_eta_when_duration_given(tmp_path, monkeypatch, caplog)
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "src.transcribe.subprocess.run",
+        "legacy.transcribe.subprocess.run",
         lambda *a, **k: SimpleNamespace(returncode=0, stderr=""),
     )
     config = _stt_config(rtf_estimate=0.2)
 
     # Act
-    with caplog.at_level("INFO", logger="src.transcribe"):
+    with caplog.at_level("INFO", logger="legacy.transcribe"):
         _run_whisper(tmp_path / "a.wav", prefix, config, duration_sec=100.0)
 
     # Assert: 시작 로그에 오디오 길이와 예상 소요시간(100×0.2=20초)이 찍힌다
@@ -200,9 +200,9 @@ def _valid_transcription(end_ms: int = 1000) -> dict:
 
 def _patch_transcribe_internals(monkeypatch, *, duration, data):
     # transcribe() 종료 로그/RTF 계산만 보려고 의존성 검사·WAV 읽기·subprocess 를 우회한다.
-    monkeypatch.setattr("src.transcribe._check_dependencies", lambda config: None)
-    monkeypatch.setattr("src.transcribe._wav_duration_sec", lambda path: duration)
-    monkeypatch.setattr("src.transcribe._run_whisper", lambda *a, **k: data)
+    monkeypatch.setattr("legacy.transcribe._check_dependencies", lambda config: None)
+    monkeypatch.setattr("legacy.transcribe._wav_duration_sec", lambda path: duration)
+    monkeypatch.setattr("legacy.transcribe._run_whisper", lambda *a, **k: data)
 
 
 def test_transcribe_logs_completion_with_actual_rtf(tmp_path, monkeypatch, caplog):
@@ -210,7 +210,7 @@ def test_transcribe_logs_completion_with_actual_rtf(tmp_path, monkeypatch, caplo
     _patch_transcribe_internals(monkeypatch, duration=100.0, data=_valid_transcription(end_ms=100_000))
 
     # Act
-    with caplog.at_level("INFO", logger="src.transcribe"):
+    with caplog.at_level("INFO", logger="legacy.transcribe"):
         segments = transcribe(tmp_path / "a.wav", _stt_config())
 
     # Assert: 종료 로그에 오디오 길이·실측 RTF 가 찍힌다
@@ -225,7 +225,7 @@ def test_transcribe_zero_duration_does_not_divide_by_zero(tmp_path, monkeypatch,
     _patch_transcribe_internals(monkeypatch, duration=0.0, data=_valid_transcription())
 
     # Act: 예외 없이 통과해야 한다
-    with caplog.at_level("INFO", logger="src.transcribe"):
+    with caplog.at_level("INFO", logger="legacy.transcribe"):
         segments = transcribe(tmp_path / "a.wav", _stt_config())
 
     # Assert: 0 으로 나누지 않고 RTF 0.00 으로 안전하게 로깅

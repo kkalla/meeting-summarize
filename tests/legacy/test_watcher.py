@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from legacy.watcher import FolderWatcher
 from src.config import CacheConfig, WatcherConfig, _build_watcher_config
 from src.exceptions import DependencyError, PipelineError
-from src.watcher import FolderWatcher
 
 
 def _write_report(inp: Path, out: Path, cfg: object) -> None:
@@ -70,7 +70,7 @@ def test_stable_file_is_processed_and_moved_to_processed(watcher, monkeypatch):
         out.write_text("# 회의 요약\n", encoding="utf-8")
         calls.append((inp, out, cfg))
 
-    monkeypatch.setattr("src.watcher.run_pipeline", _fake_pipeline)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", _fake_pipeline)
     audio = _touch(watcher._wcfg.inbox_dir / "meeting.m4a")
 
     # Act: 첫 스캔은 안정화 미완(skip), 둘째 스캔에서 처리
@@ -88,13 +88,13 @@ def test_stable_file_is_processed_and_moved_to_processed(watcher, monkeypatch):
 def test_success_sends_notification(tmp_path, monkeypatch):
     # notify=True 일 때 처리 완료 시 성공 알림이 enabled=True 로 호출돼야 한다.
     sent: list[tuple] = []
-    monkeypatch.setattr("src.watcher.notify", lambda title, message, **kw: sent.append((title, message, kw)))
+    monkeypatch.setattr("legacy.watcher.notify", lambda title, message, **kw: sent.append((title, message, kw)))
 
     def _fake_pipeline(inp: Path, out: Path, cfg: object) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text("# 회의 요약\n내용", encoding="utf-8")
 
-    monkeypatch.setattr("src.watcher.run_pipeline", _fake_pipeline)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", _fake_pipeline)
     config = SimpleNamespace(watcher=_wcfg(tmp_path, notify=True), cache=_ccfg(tmp_path))
     instance = FolderWatcher(config, "configs/pipeline.yaml")
     instance._ensure_dirs()
@@ -112,12 +112,12 @@ def test_success_sends_notification(tmp_path, monkeypatch):
 def test_failure_sends_notification(tmp_path, monkeypatch):
     # 파이프라인 실패 시 실패 알림이 사유와 함께 호출돼야 한다.
     sent: list[tuple] = []
-    monkeypatch.setattr("src.watcher.notify", lambda title, message, **kw: sent.append((title, message, kw)))
+    monkeypatch.setattr("legacy.watcher.notify", lambda title, message, **kw: sent.append((title, message, kw)))
 
     def boom(inp: Path, out: Path, cfg: object) -> None:
         raise PipelineError("전사 실패")
 
-    monkeypatch.setattr("src.watcher.run_pipeline", boom)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", boom)
     config = SimpleNamespace(watcher=_wcfg(tmp_path, notify=True), cache=_ccfg(tmp_path))
     instance = FolderWatcher(config, "configs/pipeline.yaml")
     instance._ensure_dirs()
@@ -134,7 +134,7 @@ def test_failure_sends_notification(tmp_path, monkeypatch):
 def test_growing_file_is_not_processed(watcher, monkeypatch):
     # Arrange
     called: list[tuple] = []
-    monkeypatch.setattr("src.watcher.run_pipeline", lambda *a: called.append(a))
+    monkeypatch.setattr("legacy.watcher.run_pipeline", lambda *a: called.append(a))
     audio = _touch(watcher._wcfg.inbox_dir / "uploading.m4a", b"part")
 
     # Act: 스캔 사이에 크기가 변하면 안정화가 리셋된다
@@ -150,7 +150,7 @@ def test_growing_file_is_not_processed(watcher, monkeypatch):
 def test_unsupported_extension_is_ignored(watcher, monkeypatch):
     # Arrange
     called: list[tuple] = []
-    monkeypatch.setattr("src.watcher.run_pipeline", lambda *a: called.append(a))
+    monkeypatch.setattr("legacy.watcher.run_pipeline", lambda *a: called.append(a))
     note = _touch(watcher._wcfg.inbox_dir / "notes.txt")
 
     # Act
@@ -167,7 +167,7 @@ def test_pipeline_failure_moves_file_to_failed_and_does_not_raise(watcher, monke
     def boom(*_args):
         raise PipelineError("STT 실패")
 
-    monkeypatch.setattr("src.watcher.run_pipeline", boom)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", boom)
     audio = _touch(watcher._wcfg.inbox_dir / "bad.m4a")
 
     # Act
@@ -184,7 +184,7 @@ def test_unexpected_exception_moves_to_failed_and_daemon_survives(watcher, monke
     def boom(*_args):
         raise ValueError("예상치 못한 오류")
 
-    monkeypatch.setattr("src.watcher.run_pipeline", boom)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", boom)
     audio = _touch(watcher._wcfg.inbox_dir / "weird.m4a")
 
     # Act: 예외가 스캔 루프로 전파되지 않아야 한다(데몬 생존)
@@ -268,7 +268,7 @@ def test_build_watcher_config_rejects_empty_extensions():
 
 def test_empty_output_moves_file_to_failed(watcher, monkeypatch):
     # run_pipeline 이 예외 없이 반환했지만 리포트를 만들지 못한 경우 → processed 가 아닌 failed.
-    monkeypatch.setattr("src.watcher.run_pipeline", lambda inp, out, cfg: None)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", lambda inp, out, cfg: None)
     audio = _touch(watcher._wcfg.inbox_dir / "silent.m4a")
 
     watcher._scan_once()
@@ -289,7 +289,7 @@ def test_permanent_move_failure_quarantines_and_stops_reprocessing(watcher, monk
     def _raise_rofs(path, dest_dir):
         raise OSError(errno.EROFS, "read-only file system")
 
-    monkeypatch.setattr("src.watcher.run_pipeline", _fake_pipeline)
+    monkeypatch.setattr("legacy.watcher.run_pipeline", _fake_pipeline)
     monkeypatch.setattr(watcher, "_move", _raise_rofs)
     audio = _touch(watcher._wcfg.inbox_dir / "stuck.m4a")
 
@@ -362,7 +362,7 @@ def _make_watcher(tmp_path: Path, *, cache_enabled: bool) -> FolderWatcher:
 def test_scan_once_purges_cache(tmp_path, monkeypatch):
     watcher = _make_watcher(tmp_path, cache_enabled=True)
     calls = {"n": 0}
-    monkeypatch.setattr("src.watcher.purge_expired", lambda d, ttl: calls.__setitem__("n", calls["n"] + 1) or 0)
+    monkeypatch.setattr("legacy.watcher.purge_expired", lambda d, ttl: calls.__setitem__("n", calls["n"] + 1) or 0)
     monkeypatch.setattr(watcher, "_list_candidates", lambda: [])
     watcher._scan_once()
     assert calls["n"] == 1
@@ -374,7 +374,7 @@ def test_purge_cache_swallows_errors(tmp_path, monkeypatch):
     def _boom(d, ttl):
         raise OSError("디스크 오류")
 
-    monkeypatch.setattr("src.watcher.purge_expired", _boom)
+    monkeypatch.setattr("legacy.watcher.purge_expired", _boom)
     # 예외가 새지 않아야 한다(데몬 생존 우선).
     watcher._purge_cache()
 
@@ -385,7 +385,7 @@ def test_purge_cache_skipped_when_disabled(tmp_path, monkeypatch):
     def _fail(d, ttl):
         raise AssertionError("disabled 인데 purge_expired 호출됨")
 
-    monkeypatch.setattr("src.watcher.purge_expired", _fail)
+    monkeypatch.setattr("legacy.watcher.purge_expired", _fail)
     watcher._purge_cache()
 
 
@@ -394,7 +394,7 @@ def test_purge_cache_throttled_within_interval(tmp_path, monkeypatch):
     watcher = _make_watcher(tmp_path, cache_enabled=True)
     calls = {"n": 0}
     monkeypatch.setattr(
-        "src.watcher.purge_expired",
+        "legacy.watcher.purge_expired",
         lambda d, ttl: calls.__setitem__("n", calls["n"] + 1) or 0,
     )
     watcher._purge_cache()  # 첫 호출 — 정리한다

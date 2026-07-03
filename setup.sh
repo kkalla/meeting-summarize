@@ -5,6 +5,9 @@
 #   - ggml-large-v3 모델 다운로드 (한국어 정확도 우선; turbo 대비 느리지만 인식 품질↑)
 # 여러 번 실행해도 안전하도록, 이미 있는 단계는 건너뜁니다.
 #
+# 주의: legacy/ 로컬 whisper.cpp 파이프라인 전용 준비 스크립트다. Slack 봇
+# (scripts/run_slack_bot.py)만 쓸 거면 이 스크립트는 필요 없다(legacy/README.md 참고).
+#
 # 사용법: ./setup.sh [--rebuild]
 #   --rebuild  whisper-cli 강제 재빌드 (프로젝트 폴더 이동/이름 변경 후 rpath 가 깨졌을 때)
 set -euo pipefail

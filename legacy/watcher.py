@@ -1,8 +1,11 @@
 """폴더 watcher: inbox 를 폴링해 안정화된 녹음파일을 파이프라인에 흘려보낸다.
 
 podman 컨테이너 안에서 데몬으로 동작한다. 새 파일이 업로드되면(크기 안정화로
-완료 판정) 기존 :func:`~src.pipeline.run_pipeline` 을 그대로 호출하고, 결과에 따라
+완료 판정) 기존 :func:`~legacy.pipeline.run_pipeline` 을 그대로 호출하고, 결과에 따라
 원본을 ``processed/`` 또는 ``failed/`` 로 옮긴다. 한 번에 한 파일씩 순차 처리한다.
+
+**legacy**: 로컬 whisper.cpp 기반 CLI 파이프라인 전용 데몬. 현재 주력 사용법은 Slack 봇
+(``src/slack_bot/``)이다.
 """
 
 from __future__ import annotations
@@ -14,11 +17,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from src.cache import purge_expired
+from legacy.cache import purge_expired
+from legacy.pipeline import run_pipeline
 from src.config import PipelineConfig, WatcherConfig
 from src.exceptions import PipelineError
 from src.notify import notify
-from src.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 

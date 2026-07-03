@@ -18,7 +18,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-from src import rtf_calibration
+from legacy import rtf_calibration
 from src.config import ConfidenceGate, SttConfig
 from src.exceptions import DependencyError, TranscriptionError
 

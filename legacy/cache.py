@@ -17,8 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from legacy.transcribe import Segment
 from src.exceptions import CacheError
-from src.transcribe import Segment
 
 if TYPE_CHECKING:
     from src.config import SttConfig

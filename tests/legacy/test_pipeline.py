@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src import pipeline, rtf_calibration
+from legacy import pipeline, rtf_calibration
+from legacy.transcribe import Segment
 from src.config import CacheConfig
-from src.transcribe import Segment
 
 
 def _seg():

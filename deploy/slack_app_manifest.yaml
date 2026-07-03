@@ -1,0 +1,40 @@
+# Slack 앱 매니페스트 — 회의 요약 봇.
+#
+# 사용법:
+#   1) https://api.slack.com/apps → "Create New App" → "From an app manifest"
+#   2) 워크스페이스 선택 → 이 파일 내용을 YAML 탭에 붙여넣기 → "Create"
+#   3) 생성 후 "Install to Workspace" 클릭 → OAuth & Permissions 에서 Bot Token(xoxb-) 확인
+#   4) "Basic Information" > "App-Level Tokens" 에서 connections:write 스코프로 토큰 생성(xapp-)
+#      — 이 토큰은 매니페스트로 자동 생성이 안 되고 반드시 이 단계를 수동으로 거쳐야 한다.
+#   5) 두 토큰을 .env 의 SLACK_BOT_TOKEN / SLACK_APP_TOKEN 에 채워넣기
+#
+# 이미 앱을 만들었고 설정만 맞추고 싶다면: 앱 관리 페이지 좌측 "App Manifest" 메뉴에서
+# 이 내용으로 덮어써도 된다(기존 토큰은 유지됨).
+
+_metadata:
+  major_version: 1
+display_information:
+  name: 회의 요약 봇
+  description: 오디오 파일을 자동으로 전사하고 요약해 돌려주는 개인용 봇
+  background_color: "#2c2d30"
+features:
+  bot_user:
+    display_name: 회의 요약 봇
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - files:read
+      - files:write
+      - im:history
+      - im:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

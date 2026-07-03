@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from src import rtf_calibration
+from legacy import rtf_calibration
 
 
 @pytest.fixture

@@ -1,6 +1,11 @@
 """전체 파이프라인 오케스트레이션: 변환 → 전사 → 청킹 → 요약 → 리포트.
 
 의존성/키 선검사를 가능한 한 앞단에서 수행해, 비싼 전사/요약 전에 빠르게 실패한다.
+
+**legacy**: 로컬 whisper.cpp 기반 CLI 파이프라인. 현재 주력 사용법은 Slack 봇
+(``src/slack_bot/``)이며, 이 모듈은 그 대체(OpenRouter STT + 로컬 whisper.cpp 없이도
+동작)가 필요 없는 경우를 위해 그대로 보존돼 있다. 요약/리포트 단계(``src.summarize``/
+``src.report``)는 Slack 봇과 공유한다.
 """
 
 from __future__ import annotations
@@ -10,14 +15,15 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from src import cache, rtf_calibration
-from src.audio import convert_to_wav
-from src.chunking import Chunk, chunk_segments
+from legacy import cache, rtf_calibration
+from legacy.audio import convert_to_wav
+from legacy.chunking import chunk_segments
+from legacy.transcribe import Segment, transcribe
+from src.chunking import Chunk
 from src.config import PROJECT_ROOT, PipelineConfig, load_config
 from src.exceptions import CacheError, DependencyError
 from src.report import ReportMeta, render_report
 from src.summarize import summarize_meeting
-from src.transcribe import Segment, transcribe
 
 logger = logging.getLogger(__name__)
 

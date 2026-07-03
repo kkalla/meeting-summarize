@@ -41,3 +41,7 @@ class TruncatedResponseError(SummarizationError):
 
 class CacheError(PipelineError):
     """전사 캐시 조회/저장 실패. 치명적이지 않게 다룬다(캐시 없이 전사로 폴백)."""
+
+
+class SlackBotError(PipelineError):
+    """Slack 봇 전용 실패: 파일 다운로드, Slack API 호출 등 STT/요약 외 단계."""

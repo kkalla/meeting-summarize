@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import cache
+from legacy import cache
+from legacy.transcribe import Segment
 from src.exceptions import CacheError
-from src.transcribe import Segment
 
 
 def _stt(model_path: str = "ggml-large-v3-turbo.bin", language: str = "ko", prompt: str = ""):

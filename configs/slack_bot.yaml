@@ -1,0 +1,42 @@
+# Slack 회의 요약 봇 설정.
+# 매직넘버/모델명/임계값은 전부 여기로 모읍니다. 코드에 하드코딩 금지.
+#
+# 이 파일은 configs/pipeline.yaml(로컬 CLI 파이프라인)과 별개다. Slack 봇은 CLAUDE.md 가
+# 명시한 "서버/REST/웹UI 범위 밖(KISS)" CLI 파이프라인과는 다른, 별도로 추가된 진입점
+# 이므로 설정도 분리한다 — 요약 단계(OpenRouter LLM)만 configs/pipeline.yaml 의
+# summarize 섹션을 그대로 재사용하고, 전사(STT)는 로컬 whisper.cpp 대신 OpenRouter STT
+# API 를 쓴다(Slack 봇은 로컬 whisper.cpp 가 없는 환경에서도 돌아가야 하므로).
+
+slack:
+  # 메시지에 첨부된 파일 중 처리 대상으로 볼 확장자(소문자, 점 포함). 그 외는 무시.
+  allowed_extensions:
+    - ".m4a"
+    - ".mp3"
+    - ".wav"
+    - ".mp4"
+    - ".ogg"
+    - ".webm"
+    - ".flac"
+    - ".aac"
+  # 생성된 요약 리포트(.md) 저장 디렉토리. 상대경로는 프로젝트 루트 기준.
+  # watcher 의 data/output 과 분리해, 어느 경로로 들어온 회의인지 한눈에 구분한다.
+  output_dir: "data/slack_output"
+  # 오디오 파일을 받았을 때 즉시 보내는 안내 메시지(스레드 ack). Slack Events API 는
+  # 3초 내 이벤트를 처리하지 않으면 재전송하므로, 무거운 처리(다운로드/전사/요약)는
+  # 백그라운드로 넘기고 이 메시지만 먼저 보내 재전송으로 인한 중복 처리를 피한다.
+  ack_message: "🎧 오디오 파일을 받았습니다. 전사 + 요약을 시작합니다(몇 분 정도 걸릴 수 있어요)."
+
+stt:
+  # OpenRouter 오디오 전사 모델. 2026-06-02 출시, 초당(정확히는 duration 기반) 과금
+  # (대략 시간당 $0.36). 무료 티어가 없으므로 실행마다 소액 과금이 발생한다.
+  model: "microsoft/mai-transcribe-1.5"
+  base_url: "https://openrouter.ai/api/v1"
+  # 전사 언어(ISO 639-1). 비우면 자동감지.
+  language: "ko"
+  # 단일 HTTP 요청 타임아웃(초). 1시간 오디오도 수십 초 안에 처리된다고 공지돼 있으나
+  # 네트워크 변동성을 감안해 넉넉히 둔다.
+  request_timeout_sec: 300
+  # 429/5xx 재시도 횟수(summarize.py 의 폴백 루프와 동일한 패턴, 모델은 폴백 체인 없이 1개뿐).
+  max_retries: 3
+  # 지수 백오프 기준(초). 대기 = backoff_base ** attempt.
+  backoff_base: 2

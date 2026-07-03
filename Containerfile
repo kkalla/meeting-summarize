@@ -1,6 +1,10 @@
 # 회의 요약 watcher 이미지 — whisper.cpp(CPU) STT + OpenRouter 요약을 한 컨테이너에 담는다.
 # 호스트 setup.sh 는 macOS Metal 빌드(Mach-O)라 linux 컨테이너에서 실행 불가 →
 # 여기서 동일 경로에 CPU 빌드를 새로 만든다. 모델(.bin)은 compose 볼륨으로 주입한다.
+#
+# 주의: 로컬 whisper.cpp 기반 legacy 파이프라인 전용 이미지다. 현재 주력 사용법은
+# Slack 봇(scripts/run_slack_bot.py, Socket Mode)이며 이 이미지로 담을 필요가 없다
+# (자세한 내용은 legacy/README.md 참고).
 FROM python:3.12-slim
 
 # 1) 시스템 의존성: ffmpeg(오디오 변환) + whisper.cpp 빌드 도구.
@@ -25,13 +29,14 @@ RUN pip install --no-cache-dir \
         "openai>=1.30.0" "python-dotenv>=1.0.0" "pyyaml>=6.0"
 
 # 4) 애플리케이션 코드. 모델(.bin)과 data/ 는 이미지에 굽지 않고 볼륨으로 주입한다.
+#    legacy/ 는 run_watcher.py 가 여기 있으므로 함께 담는다(src/ 의 core 모듈 재사용).
 COPY src/ ./src/
-COPY scripts/ ./scripts/
+COPY legacy/ ./legacy/
 COPY configs/ ./configs/
 COPY prompts/ ./prompts/
 
-# from src... 임포트가 동작하도록 프로젝트 루트를 모듈 경로에 둔다.
+# from src.../from legacy... 임포트가 동작하도록 프로젝트 루트를 모듈 경로에 둔다.
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "scripts/run_watcher.py"]
+CMD ["python", "legacy/run_watcher.py"]

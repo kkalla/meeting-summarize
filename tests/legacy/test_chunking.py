@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from src.chunking import chunk_segments
+from legacy.chunking import chunk_segments
+from legacy.transcribe import Segment
 from src.config import ChunkingConfig
-from src.transcribe import Segment
 
 
 def _seg(start: float, end: float, text: str = "말") -> Segment:

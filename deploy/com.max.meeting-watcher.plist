@@ -6,6 +6,10 @@
   - KeepAlive: 프로세스가 죽으면 자동 재시작(도커 restart:unless-stopped 와 동일)
   - whisper.cpp 는 호스트 Metal 빌드를 그대로 쓰므로 GPU 가속(RTF~0.6)이 적용된다.
 
+  주의: 로컬 whisper.cpp 기반 legacy 파이프라인 전용이다. 현재 주력 사용법은 Slack 봇
+        (scripts/run_slack_bot.py)이며, 이 launchd 데몬은 legacy/run_watcher.py 를
+        가리키도록 갱신돼 있다(legacy/README.md 참고).
+
   설치:
     cp deploy/com.max.meeting-watcher.plist ~/Library/LaunchAgents/
     launchctl load -w ~/Library/LaunchAgents/com.max.meeting-watcher.plist
@@ -25,7 +29,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Users/max/00_Projects/01_meeting_summarize_automation/.venv/bin/python</string>
-        <string>scripts/run_watcher.py</string>
+        <string>legacy/run_watcher.py</string>
         <string>-c</string>
         <string>configs/pipeline.yaml</string>
     </array>

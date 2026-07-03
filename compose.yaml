@@ -4,6 +4,9 @@
 #   1) 호스트에서 setup.sh 로 모델(.bin)을 받아둔다(vendor/whisper.cpp/models/).
 #   2) .env 에 OPENROUTER_API_KEY 를 채운다.
 #   3) data/inbox 에 녹음파일을 떨구면 자동 처리되어 data/output 에 요약이 생긴다.
+#
+# 주의: 로컬 whisper.cpp 기반 legacy 파이프라인 전용이다. 현재 주력 사용법은 Slack 봇
+# (scripts/run_slack_bot.py, Socket Mode, 컨테이너 불필요)이다. legacy/README.md 참고.
 services:
   watcher:
     build:
