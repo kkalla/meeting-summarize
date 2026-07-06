@@ -36,7 +36,7 @@
 - [x] **legacy launchd 데몬 끄기**: `com.max.meeting-watcher` unload 완료(`launchctl list` 에서 PID `-`/crash loop 상태였던 것 확인 후 종료). podman 컨테이너를 쓰고 있었다면 그것도 `podman ps` 로 확인 후 정리.
 - [x] **`configs/pipeline.yaml` 로컬 변경사항 확인**: STT 프롬프트 용어집 보강 건 — `configs: STT 프롬프트 용어집 보강` 커밋으로 반영 완료.
 - [x] **git 커밋**: `configs: STT 프롬프트 용어집 보강` + `feat: Slack 봇을 주력 진입점으로 추가...` 두 커밋으로 분리 완료, push 완료.
-- [ ] **Slack 봇 상시 실행(데몬화)**: 지금은 터미널/세션에 붙여 `uv run python scripts/run_slack_bot.py` 로만 띄운 상태라, 세션이 끝나면 프로세스도 같이 죽는다. legacy watcher 처럼 `deploy/` 밑에 launchd plist 를 만들어 macOS 로그인 시 자동 시작 + 크래시 시 자동 재시작되게 등록하는 게 필요(`deploy/install-launchd.sh`/`deploy/com.max.meeting-watcher.plist` 참고 패턴, `WorkingDirectory`/`ProgramArguments` 만 `scripts/run_slack_bot.py` 로 바꾸면 됨).
+- [x] **Slack 봇 상시 실행(데몬화)**: `deploy/com.max.meeting-slack-bot.plist` + `deploy/install-launchd-slack-bot.sh` 추가, launchd LaunchAgent 로 등록 완료(로그인 시 자동 시작, 크래시 시 자동 재시작). 로그는 `logs/slack_bot.log`/`logs/slack_bot.err.log`(Python logging 기본이 stderr 라 실제로는 `.err.log` 쪽에 찍힌다). 상태: `launchctl list | grep meeting-slack-bot`. 프로젝트 폴더를 다시 옮기면 plist 안 절대경로 재확인 필요(legacy watcher 때와 동일한 함정).
 
 ## 4. 참고 문서
 

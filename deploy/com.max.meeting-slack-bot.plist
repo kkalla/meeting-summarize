@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Slack 회의 요약 봇(scripts/run_slack_bot.py)을 macOS launchd LaunchAgent 로 상시 실행한다.
+  - RunAtLoad: 로그인 시 자동 시작
+  - KeepAlive: 프로세스가 죽거나(네트워크 재연결 실패 등) 세션이 끝나도 자동 재시작
+  - src/slack_bot/audio_split.py 가 ffmpeg/ffprobe 를 쓰므로 PATH 에 /opt/homebrew/bin 필요.
+
+  설치:
+    ./deploy/install-launchd-slack-bot.sh
+  로그 확인:
+    tail -f logs/slack_bot.log
+  중지/해제:
+    launchctl unload -w ~/Library/LaunchAgents/com.max.meeting-slack-bot.plist
+
+  주의: 경로가 /Users/max/00_Projects/98_meeting_summarize_automation 로 하드코딩돼 있다.
+        프로젝트를 옮기면 아래 절대경로를 함께 수정한다(legacy 데몬 plist 가 겪었던
+        폴더 이동 rpath/경로 깨짐 문제와 동일 — 옮긴 뒤엔 재설치 스크립트를 다시 돌릴 것).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.max.meeting-slack-bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/max/00_Projects/98_meeting_summarize_automation/.venv/bin/python3</string>
+        <string>scripts/run_slack_bot.py</string>
+    </array>
+
+    <!-- load_dotenv()·상대경로(configs/, data/)가 이 디렉토리 기준으로 풀린다. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/max/00_Projects/98_meeting_summarize_automation</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- scripts/run_slack_bot.py 의 `from src...` 임포트를 위해 프로젝트 루트를 모듈 경로에 둔다. -->
+        <key>PYTHONPATH</key>
+        <string>/Users/max/00_Projects/98_meeting_summarize_automation</string>
+        <!-- launchd 는 최소 PATH 만 주므로 ffmpeg/ffprobe(/opt/homebrew/bin) 를 명시한다. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- 로그가 버퍼링 없이 즉시 파일에 찍히게 한다. -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- 재연결 실패로 반복 종료될 때 재시작 폭주를 막는 최소 간격(초). -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/max/00_Projects/98_meeting_summarize_automation/logs/slack_bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/max/00_Projects/98_meeting_summarize_automation/logs/slack_bot.err.log</string>
+</dict>
+</plist>
