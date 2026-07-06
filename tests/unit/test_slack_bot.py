@@ -66,6 +66,8 @@ def _config(allowed=(".m4a", ".wav")) -> SlackBotConfig:
             request_timeout_sec=10,
             max_retries=1,
             backoff_base=2.0,
+            segment_minutes=15,
+            segment_overlap_sec=30,
         ),
         slack_bot_token="xoxb-t",
         slack_app_token="xapp-t",

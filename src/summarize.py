@@ -62,6 +62,22 @@ _THINK_BLOCK = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL | re.IGNORECASE
 # 가 남거나, provider 가 여는 태그 없이 닫는 태그만 흘린 비정상 누출의 흔적이다.
 _ORPHAN_THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
 
+# <think> 태그 없이도 누출되는 변종: 일부(특히 무료) 모델이 지시를 확인/재서술하는 평문
+# 메모("Now produce final answer... Let's craft")를 늘어놓다가 reduce_summary.txt 가 요구하는
+# 첫 헤더로 다시 시작한다. 헤더가 두 번 이상 등장하면 마지막 등장이 실제 최종 출력이므로 그
+# 앞은 버린다 — 모델이 스스로 표시한 "진짜 시작점"을 신뢰하는 방어적 자르기.
+_REQUIRED_LEADING_HEADER = "## 핵심 요약"
+
+
+def _strip_leaked_preamble(text: str, *, model: str) -> str:
+    """``_REQUIRED_LEADING_HEADER`` 가 두 번 이상 나오면 마지막 등장부터만 남긴다."""
+    first_index = text.find(_REQUIRED_LEADING_HEADER)
+    last_index = text.rfind(_REQUIRED_LEADING_HEADER)
+    if last_index > first_index:
+        logger.warning("모델 %s 응답에 헤더가 중복 등장(사전 메모 누출 추정) — 마지막 등장부터만 사용합니다.", model)
+        return text[last_index:].strip()
+    return text
+
 
 def _strip_reasoning(text: str) -> str:
     """content 에 인라인으로 남은 ``<think>...</think>`` 블록을 제거한다.
@@ -292,4 +308,4 @@ def _chat_once(prompt: str, *, model: str, config: SummarizeConfig, client: Open
         # 태그 흔적도 없이 빈/공백 응답인 경우는 일시적일 수 있으므로(콘텐츠 필터 미설정·순간 장애 등)
         # 누출로 오분류하지 않고 일반 오류로 던져 재시도 경로를 태운다.
         raise SummarizationError(f"{model} 이 빈 응답을 반환했습니다(finish_reason={finish_reason}).")
-    return stripped
+    return _strip_leaked_preamble(stripped, model=model)

@@ -20,6 +20,7 @@ vendor/
 out/
 *.wav
 *.json.tmp
+tmp/
 
 # watcher 입출력 폴더 (compose 볼륨 마운트 대상)
 data/

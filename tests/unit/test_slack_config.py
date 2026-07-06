@@ -37,6 +37,8 @@ def _stt(**overrides) -> dict:
         "request_timeout_sec": 300,
         "max_retries": 3,
         "backoff_base": 2.0,
+        "segment_minutes": 15,
+        "segment_overlap_sec": 30,
     }
     base.update(overrides)
     return base
@@ -55,6 +57,16 @@ def test_stt_config_rejects_non_positive_max_retries():
 def test_stt_config_rejects_non_positive_timeout():
     with pytest.raises(DependencyError):
         OpenRouterSttConfig(**_stt(request_timeout_sec=0))
+
+
+def test_stt_config_rejects_non_positive_segment_minutes():
+    with pytest.raises(DependencyError):
+        OpenRouterSttConfig(**_stt(segment_minutes=0))
+
+
+def test_stt_config_rejects_negative_segment_overlap_sec():
+    with pytest.raises(DependencyError):
+        OpenRouterSttConfig(**_stt(segment_overlap_sec=-1))
 
 
 def test_stt_config_accepts_valid_values():
@@ -80,6 +92,8 @@ def _raw() -> dict:
             "request_timeout_sec": 300,
             "max_retries": 3,
             "backoff_base": 2,
+            "segment_minutes": 15,
+            "segment_overlap_sec": 30,
         },
     }
 

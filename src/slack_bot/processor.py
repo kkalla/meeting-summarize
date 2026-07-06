@@ -5,9 +5,11 @@
 프롬프트/설정(``configs/pipeline.yaml`` 의 ``summarize`` 섹션)을 그대로 재사용한다 — 요약
 로직을 이중으로 유지하지 않기 위함이다.
 
-OpenRouter STT 는 세그먼트 단위 타임스탬프를 주지 않으므로, 전체 텍스트를 청크 하나로
-감싼다(``chunk_segments`` 를 거치지 않는다). 청크가 하나뿐이면 ``summarize_meeting`` 이
-자동으로 single-shot 분기를 타므로 Map 단계는 실행되지 않는다.
+OpenRouter STT 는 세그먼트 단위 타임스탬프를 주지 않으므로, 구간(오디오 분할 단위)마다
+텍스트 하나짜리 청크로 감싼다(``chunk_segments`` 를 거치지 않는다). 짧은 오디오(청크 1개)는
+``summarize_meeting`` 이 자동으로 single-shot 분기를 타 Map 단계를 건너뛰고, 긴 오디오는
+``src.slack_bot.audio_split`` 이 여러 구간으로 잘라 청크가 여러 개가 되면서 자연히
+기존 Map-Reduce 경로를 재사용한다.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from src.chunking import Chunk
 from src.config import PROJECT_ROOT, load_config
 from src.exceptions import DependencyError, SlackBotError
 from src.report import ReportMeta, render_report
+from src.slack_bot.audio_split import probe_duration_sec, split_audio
 from src.slack_bot.config import SlackBotConfig
 from src.slack_bot.openrouter_stt import transcribe_audio
 from src.summarize import summarize_meeting
@@ -35,6 +38,9 @@ REDUCE_PROMPT = PROMPTS_DIR / "reduce_summary.txt"
 REPORT_SUFFIX = ".md"
 # Slack 다운로드 전용 타임아웃(초). 회의 녹음은 수십~수백 MB 일 수 있어 넉넉히 둔다.
 DOWNLOAD_TIMEOUT_SEC = 120
+# 확장자가 OpenRouter STT 가 인식하는 포맷 문자열과 다른 경우의 매핑. 그 외는 점만 떼서 그대로 사용.
+# .qta: 아이패드 Voice Memos 저장 확장자 — 컨테이너는 m4a 와 동일한 mp4 계열이라 그대로 m4a 로 보낸다.
+_AUDIO_FORMAT_OVERRIDES = {".qta": "m4a"}
 
 
 @dataclass(frozen=True)
@@ -79,17 +85,35 @@ def process_meeting_audio(
     audio_bytes = _download_slack_file(audio_file.url_private, config.slack_bot_token, http_client)
     logger.info("Slack 파일 다운로드 완료: %s (%d bytes)", audio_file.name, len(audio_bytes))
 
-    stt_result = transcribe_audio(
+    audio_format = _AUDIO_FORMAT_OVERRIDES.get(audio_file.extension, audio_file.extension.lstrip("."))
+    duration_sec = probe_duration_sec(audio_bytes, audio_file.extension)
+    audio_segments = split_audio(
         audio_bytes,
-        audio_format=audio_file.extension.lstrip("."),
-        config=config.stt,
-        api_key=config.openrouter_api_key,
+        input_extension=audio_file.extension,
+        output_extension=f".{audio_format}",
+        duration_sec=duration_sec,
+        segment_sec=config.stt.segment_minutes * 60,
+        overlap_sec=config.stt.segment_overlap_sec,
     )
-    logger.info("OpenRouter STT 전사 완료: %d자, %.0f초", len(stt_result.text), stt_result.duration_sec)
 
-    chunk = Chunk(index=0, start=0.0, end=stt_result.duration_sec, text=stt_result.text, segments=())
+    chunks = []
+    for i, segment in enumerate(audio_segments):
+        stt_result = transcribe_audio(
+            segment.data, audio_format=audio_format, config=config.stt, api_key=config.openrouter_api_key
+        )
+        chunks.append(
+            Chunk(
+                index=i,
+                start=segment.start_sec,
+                end=segment.start_sec + stt_result.duration_sec,
+                text=stt_result.text,
+                segments=(),
+            )
+        )
+    logger.info("OpenRouter STT 전사 완료: %d개 구간, %d자", len(chunks), sum(len(c.text) for c in chunks))
+
     summary = summarize_meeting(
-        [chunk],
+        chunks,
         config=pipeline_cfg.summarize,
         api_key=pipeline_cfg.api_key,
         map_template=_read_prompt(MAP_PROMPT),
@@ -99,9 +123,9 @@ def process_meeting_audio(
 
     meta = ReportMeta(
         source_file=audio_file.name,
-        duration_sec=stt_result.duration_sec,
-        segment_count=1,
-        chunk_count=1,
+        duration_sec=duration_sec,
+        segment_count=len(chunks),
+        chunk_count=len(chunks),
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         model=summary.model,
     )

@@ -17,6 +17,7 @@ slack:
     - ".ogg"
     - ".webm"
     - ".flac"
+    - ".qta"  # 아이패드 Voice Memos 저장 확장자(컨테이너는 m4a와 동일 mp4 계열, processor.py 에서 포맷 매핑)
     - ".aac"
   # 생성된 요약 리포트(.md) 저장 디렉토리. 상대경로는 프로젝트 루트 기준.
   # watcher 의 data/output 과 분리해, 어느 경로로 들어온 회의인지 한눈에 구분한다.
@@ -40,3 +41,9 @@ stt:
   max_retries: 3
   # 지수 백오프 기준(초). 대기 = backoff_base ** attempt.
   backoff_base: 2
+  # 오디오 분할 청크 길이(분). OpenRouter STT 업스트림 프로바이더 타임아웃(약 60초)
+  # 대응 — 이 길이를 넘는 오디오는 ffmpeg 로 잘라 구간별로 전사한 뒤 이어붙인다
+  # (legacy chunking.minutes 와 동일한 값/아이디어, 여기선 텍스트가 아니라 오디오 자체를 자름).
+  segment_minutes: 15
+  # 구간 간 겹침(초). 경계에서 말이 잘리는 문제 완화.
+  segment_overlap_sec: 30

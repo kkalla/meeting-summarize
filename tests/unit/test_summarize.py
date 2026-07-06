@@ -329,6 +329,31 @@ def test_body_containing_literal_close_tag_is_not_silently_truncated():
     assert [c["model"] for c in client.calls][-1] == "m2"
 
 
+def test_untagged_preamble_before_duplicate_header_is_dropped():
+    # 회귀 방지: 실전에서 관찰된 케이스 — <think> 태그 없이 평문으로 확인 메모를 늘어놓다가
+    # 지시된 헤더로 다시 시작하는 무료 모델. 헤더가 두 번 등장하면 마지막 등장부터만 남긴다.
+    leaked = (
+        "## 핵심 요약\n- Need to mention request ID: yes.\n\n"
+        "Now produce final answer in markdown with sections.\n\n"
+        "Let's craft## 핵심 요약\n- 실제 요약 내용"
+    )
+    client = FakeClient(lambda _: leaked)
+
+    result = _summarize([_chunk(0, "회의")], client)
+
+    assert result == "## 핵심 요약\n- 실제 요약 내용"
+    assert "Now produce final answer" not in result
+
+
+def test_single_occurrence_header_is_left_untouched():
+    # 헤더가 정확히 한 번만 나오면(정상 케이스) 아무것도 잘라내지 않는다.
+    client = FakeClient(lambda _: "## 핵심 요약\n- ok\n\n## 결정 사항\n- 없음")
+
+    result = _summarize([_chunk(0, "회의")], client)
+
+    assert result == "## 핵심 요약\n- ok\n\n## 결정 사항\n- 없음"
+
+
 def test_think_only_content_skips_retry_and_falls_back():
     # provider 가 exclude 를 무시하고 본문 없이 <think>...</think> 만 보낸 경우.
     # 빈 응답으로 뭉개지 않고 ReasoningLeakError 로 분류 → 결정적이라 재시도 없이 바로 다음 모델로.

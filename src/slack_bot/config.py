@@ -63,6 +63,8 @@ class OpenRouterSttConfig:
     request_timeout_sec: int
     max_retries: int
     backoff_base: float
+    segment_minutes: int
+    segment_overlap_sec: int
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -71,6 +73,10 @@ class OpenRouterSttConfig:
             raise DependencyError(f"stt.max_retries 는 1 이상이어야 합니다: {self.max_retries}")
         if self.request_timeout_sec < 1:
             raise DependencyError(f"stt.request_timeout_sec 는 1 이상이어야 합니다: {self.request_timeout_sec}")
+        if self.segment_minutes < 1:
+            raise DependencyError(f"stt.segment_minutes 는 1 이상이어야 합니다: {self.segment_minutes}")
+        if self.segment_overlap_sec < 0:
+            raise DependencyError(f"stt.segment_overlap_sec 는 0 이상이어야 합니다: {self.segment_overlap_sec}")
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,8 @@ def _build_config(raw: dict, *, bot_token: str, app_token: str, api_key: str) ->
                 request_timeout_sec=int(stt_raw["request_timeout_sec"]),
                 max_retries=int(stt_raw["max_retries"]),
                 backoff_base=float(stt_raw["backoff_base"]),
+                segment_minutes=int(stt_raw["segment_minutes"]),
+                segment_overlap_sec=int(stt_raw["segment_overlap_sec"]),
             ),
             slack_bot_token=bot_token,
             slack_app_token=app_token,

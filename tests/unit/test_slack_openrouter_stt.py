@@ -26,6 +26,8 @@ def _config(**overrides) -> OpenRouterSttConfig:
         "request_timeout_sec": 10,
         "max_retries": 3,
         "backoff_base": 2.0,
+        "segment_minutes": 15,
+        "segment_overlap_sec": 30,
     }
     base.update(overrides)
     return OpenRouterSttConfig(**base)
