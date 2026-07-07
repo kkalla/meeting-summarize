@@ -12,6 +12,7 @@ Slack 재전송으로 인한 중복 처리는 ``event_ts`` 기준 최근 이벤�
 from __future__ import annotations
 
 import logging
+import sys
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -134,6 +135,7 @@ def run() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,  # ponytail: basicConfig 기본 핸들러는 stderr라 launchd의 out/err 로그 분리가 깨짐
     )
     config = load_slack_bot_config()
     app = build_app(config)
