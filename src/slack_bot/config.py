@@ -80,11 +80,30 @@ class OpenRouterSttConfig:
 
 
 @dataclass(frozen=True)
+class SocketModeConfig:
+    """Socket Mode 웹소켓 재연결 폭주 감지(자가 종료 → launchd 재시작) 설정."""
+
+    error_storm_window_sec: float
+    error_storm_threshold: int
+
+    def __post_init__(self) -> None:
+        if self.error_storm_window_sec <= 0:
+            raise DependencyError(
+                f"socket_mode.error_storm_window_sec 는 0보다 커야 합니다: {self.error_storm_window_sec}"
+            )
+        if self.error_storm_threshold < 1:
+            raise DependencyError(
+                f"socket_mode.error_storm_threshold 는 1 이상이어야 합니다: {self.error_storm_threshold}"
+            )
+
+
+@dataclass(frozen=True)
 class SlackBotConfig:
     """Slack 봇 전체 설정 + 런타임 시크릿(토큰/API 키)."""
 
     slack: SlackConfig
     stt: OpenRouterSttConfig
+    socket_mode: SocketModeConfig
     slack_bot_token: str
     slack_app_token: str
     openrouter_api_key: str
@@ -145,6 +164,7 @@ def _build_config(raw: dict, *, bot_token: str, app_token: str, api_key: str) ->
     try:
         slack_raw = raw["slack"]
         stt_raw = raw["stt"]
+        socket_mode_raw = raw["socket_mode"]
         return SlackBotConfig(
             slack=SlackConfig(
                 allowed_extensions=tuple(str(ext).lower() for ext in slack_raw["allowed_extensions"]),
@@ -160,6 +180,10 @@ def _build_config(raw: dict, *, bot_token: str, app_token: str, api_key: str) ->
                 backoff_base=float(stt_raw["backoff_base"]),
                 segment_minutes=int(stt_raw["segment_minutes"]),
                 segment_overlap_sec=int(stt_raw["segment_overlap_sec"]),
+            ),
+            socket_mode=SocketModeConfig(
+                error_storm_window_sec=float(socket_mode_raw["error_storm_window_sec"]),
+                error_storm_threshold=int(socket_mode_raw["error_storm_threshold"]),
             ),
             slack_bot_token=bot_token,
             slack_app_token=app_token,

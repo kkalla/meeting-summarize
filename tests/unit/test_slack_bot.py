@@ -1,5 +1,5 @@
-"""Slack 봇 이벤트 처리 로직 단위 테스트: 자기메시지 필터링, 중복 이벤트 가드,
-오디오 파일 추출, 백그라운드 처리 결과 전달.
+"""Slack 봇 이벤트 처리 로직 단위 테스트: 중복 이벤트 가드, 오디오 파일 추출,
+백그라운드 처리 결과 전달.
 
 ``App``/``SocketModeHandler`` 는 실제 Slack 인증(auth.test) 을 유발하므로 인스턴스화하지
 않는다 — 순수 헬퍼 함수와 ``_process_and_reply`` 오케스트레이션만 테스트한다.
@@ -15,26 +15,16 @@ from src.slack_bot.bot import (
     MAX_SEEN_EVENTS,
     _already_seen,
     _extract_audio_file,
-    _is_bot_echo,
+    _install_socket_error_watchdog,
     _process_and_reply,
 )
-from src.slack_bot.config import OpenRouterSttConfig, SlackBotConfig, SlackConfig
+from src.slack_bot.config import (
+    OpenRouterSttConfig,
+    SlackBotConfig,
+    SlackConfig,
+    SocketModeConfig,
+)
 from src.slack_bot.processor import SlackAudioFile
-
-# --- _is_bot_echo -------------------------------------------------------------
-
-
-def test_is_bot_echo_true_for_bot_id():
-    assert _is_bot_echo({"bot_id": "B123"}) is True
-
-
-def test_is_bot_echo_true_for_bot_message_subtype():
-    assert _is_bot_echo({"subtype": "bot_message"}) is True
-
-
-def test_is_bot_echo_false_for_regular_user_message():
-    assert _is_bot_echo({"user": "U123"}) is False
-
 
 # --- _already_seen --------------------------------------------------------------
 
@@ -69,6 +59,7 @@ def _config(allowed=(".m4a", ".wav")) -> SlackBotConfig:
             segment_minutes=15,
             segment_overlap_sec=30,
         ),
+        socket_mode=SocketModeConfig(error_storm_window_sec=60.0, error_storm_threshold=5),
         slack_bot_token="xoxb-t",
         slack_app_token="xapp-t",
         openrouter_api_key="k",
@@ -97,6 +88,19 @@ def test_extract_audio_file_finds_supported_audio():
     assert result.name == "회의.m4a"
     assert result.extension == ".m4a"
     assert result.url_private == "https://x/회의.m4a"
+
+
+def test_extract_audio_file_ignores_bot_id_and_subtype():
+    """맥 Automation 이 봇 토큰으로 직접 올린 파일(bot_id 있음)도 처리 대상이어야 한다 —
+    확장자 필터만으로 무한루프를 막으므로 bot_id/subtype 은 판단에 관여하지 않는다."""
+    event = {
+        "bot_id": "B0BFDJ61E4U",
+        "subtype": "bot_message",
+        "files": [{"name": "회의.m4a", "url_private": "https://x/회의.m4a"}],
+    }
+    result = _extract_audio_file(event, _config())
+    assert result is not None
+    assert result.name == "회의.m4a"
 
 
 # --- _process_and_reply -----------------------------------------------------------
@@ -175,3 +179,47 @@ def test_process_and_reply_does_not_crash_worker_thread_on_unexpected_exception(
 
     assert len(client.posted) == 1
     assert "예상치 못한 오류" in client.posted[0]["text"]
+
+
+# --- _install_socket_error_watchdog ------------------------------------------
+
+
+class _FakeSocketClient:
+    def __init__(self):
+        self.on_error_listeners = []
+
+
+def test_socket_error_watchdog_exits_when_errors_exceed_threshold_in_window(monkeypatch):
+    exit_codes = []
+    monkeypatch.setattr("src.slack_bot.bot.os._exit", exit_codes.append)
+
+    client = _FakeSocketClient()
+    config = _config()  # error_storm_window_sec=60, error_storm_threshold=5
+    _install_socket_error_watchdog(client, config)
+    on_error = client.on_error_listeners[0]
+
+    for _ in range(4):
+        on_error(Exception("boom"))
+    assert exit_codes == []  # 임계값 미달이면 종료하지 않는다
+
+    on_error(Exception("boom"))
+    assert exit_codes == [1]  # 5번째(윈도우 내 임계값 도달)에 종료
+
+
+def test_socket_error_watchdog_does_not_exit_when_errors_are_spread_outside_window(monkeypatch):
+    exit_codes = []
+    monkeypatch.setattr("src.slack_bot.bot.os._exit", exit_codes.append)
+
+    fake_now = [0.0]
+    monkeypatch.setattr("src.slack_bot.bot.time.monotonic", lambda: fake_now[0])
+
+    client = _FakeSocketClient()
+    config = _config()  # error_storm_window_sec=60, error_storm_threshold=5
+    _install_socket_error_watchdog(client, config)
+    on_error = client.on_error_listeners[0]
+
+    for _ in range(4):
+        on_error(Exception("boom"))
+        fake_now[0] += 61  # 매번 윈도우 밖으로 밀려나 실패가 누적되지 않는다
+
+    assert exit_codes == []

@@ -10,6 +10,7 @@ from src.exceptions import DependencyError
 from src.slack_bot.config import (
     OpenRouterSttConfig,
     SlackConfig,
+    SocketModeConfig,
     _build_config,
 )
 
@@ -74,6 +75,24 @@ def test_stt_config_accepts_valid_values():
     assert cfg.model == "microsoft/mai-transcribe-1.5"
 
 
+# --- SocketModeConfig ---------------------------------------------------------
+
+
+def test_socket_mode_config_rejects_non_positive_window():
+    with pytest.raises(DependencyError):
+        SocketModeConfig(error_storm_window_sec=0, error_storm_threshold=5)
+
+
+def test_socket_mode_config_rejects_non_positive_threshold():
+    with pytest.raises(DependencyError):
+        SocketModeConfig(error_storm_window_sec=60.0, error_storm_threshold=0)
+
+
+def test_socket_mode_config_accepts_valid_values():
+    cfg = SocketModeConfig(error_storm_window_sec=60.0, error_storm_threshold=5)
+    assert cfg.error_storm_threshold == 5
+
+
 # --- _build_config -----------------------------------------------------------
 
 
@@ -94,6 +113,10 @@ def _raw() -> dict:
             "backoff_base": 2,
             "segment_minutes": 15,
             "segment_overlap_sec": 30,
+        },
+        "socket_mode": {
+            "error_storm_window_sec": 60,
+            "error_storm_threshold": 5,
         },
     }
 

@@ -4,15 +4,20 @@
 Events API 는 3초 내 처리를 기대하며, 넘기면 이벤트가 재전송돼 같은 파일이 중복 처리될
 수 있다. 따라서 핸들러는 ack 메시지만 즉시 보내고 실제 작업은 스레드풀로 넘긴다.
 
-또한 봇 자신이 보낸 메시지(``bot_id``/``subtype=bot_message``)를 걸러내지 않으면
-"봇이 파일을 올림 → 그 메시지에 다시 반응 → 무한루프" 위험이 있어 반드시 필터링한다.
-Slack 재전송으로 인한 중복 처리는 ``event_ts`` 기준 최근 이벤트 캐시로 한 번 더 막는다.
+처리 대상 오디오 확장자(``config.slack.allowed_extensions``)가 첨부된 메시지만 반응한다
+— ``bot_id`` 유무는 보지 않는다. 맥 Automation(Shortcuts)이 Voice Memo 를 봇 토큰으로
+직접 업로드하는 경우 그 메시지의 업로더가 봇 자신으로 찍히는데, 이것도 처리 대상이다.
+무한루프(봇이 올린 파일에 봇이 다시 반응) 위험은 이 확장자 필터만으로 이미 막힌다 —
+봇이 결과로 올리는 파일은 항상 ``.md`` 라 ``allowed_extensions`` 에 없다. Slack 재전송으로
+인한 중복 처리는 ``event_ts`` 기준 최근 이벤트 캐시로 막는다.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -42,18 +47,16 @@ def build_app(config: SlackBotConfig) -> App:
 
     @app.event("message")
     def handle_message(event: dict[str, Any], say: Any, client: WebClient) -> None:
-        if _is_bot_echo(event):
-            return
         if event.get("channel_type") != "im":
             return  # DM 만 처리 대상(채널 업로드는 스코프 밖)
+
+        audio_file = _extract_audio_file(event, config)
+        if audio_file is None:
+            return  # 오디오 첨부가 없으면(봇 자신의 ack/실패 안내 메시지 포함) 무시
 
         event_id = event.get("event_ts") or event.get("client_msg_id")
         if event_id and _already_seen(seen_events, event_id):
             logger.info("중복 이벤트 무시: %s", event_id)
-            return
-
-        audio_file = _extract_audio_file(event, config)
-        if audio_file is None:
             return
 
         logger.info("오디오 파일 수신: %s", audio_file.name)
@@ -74,11 +77,6 @@ def _already_seen(seen: OrderedDict[str, None], event_id: str) -> bool:
     if len(seen) > MAX_SEEN_EVENTS:
         seen.popitem(last=False)
     return False
-
-
-def _is_bot_echo(event: dict[str, Any]) -> bool:
-    """봇 자신이 보낸 메시지(무한루프 유발)를 걸러낸다."""
-    return bool(event.get("bot_id")) or event.get("subtype") == "bot_message"
 
 
 def _extract_audio_file(event: dict[str, Any], config: SlackBotConfig) -> SlackAudioFile | None:
@@ -130,6 +128,34 @@ def _process_and_reply(
     )
 
 
+def _install_socket_error_watchdog(client: Any, config: SlackBotConfig) -> None:
+    """웹소켓 에러가 짧은 시간에 몰리면 프로세스를 종료해 launchd 가 재시작하게 한다.
+
+    맥이 절전(디스플레이 꺼짐)에서 깨어나면 Socket Mode 웹소켓이 좀비 상태가 되어, 재연결
+    직후 즉시 ``BrokenPipeError`` 가 나는 무한루프에 빠질 수 있다(2026-07-09 실제 발생,
+    프로세스는 살아있어 launchd ``KeepAlive`` 가 개입하지 않고 몇 시간이고 방치됨). 임계값을
+    넘으면 ``os._exit`` 로 즉시 종료해 launchd 가 새 프로세스로 재시작하게 한다.
+    """
+    window_sec = config.socket_mode.error_storm_window_sec
+    threshold = config.socket_mode.error_storm_threshold
+    failure_times: list[float] = []
+
+    def on_error(_exc: Exception) -> None:
+        now = time.monotonic()
+        failure_times.append(now)
+        while failure_times and now - failure_times[0] > window_sec:
+            failure_times.pop(0)
+        if len(failure_times) >= threshold:
+            logger.error(
+                "웹소켓 재연결 실패가 %.0f초 내 %d회 발생 — 프로세스를 재시작합니다(launchd KeepAlive).",
+                window_sec,
+                len(failure_times),
+            )
+            os._exit(1)  # ponytail: 정상 종료(스레드/소켓 정리) 대신 즉시 종료 — 재시작은 launchd 에 맡긴다
+
+    client.on_error_listeners.append(on_error)
+
+
 def run() -> None:
     """설정을 로드하고 Socket Mode 로 봇을 시작한다(블로킹, ``SIGINT`` 까지 실행)."""
     logging.basicConfig(
@@ -140,5 +166,6 @@ def run() -> None:
     config = load_slack_bot_config()
     app = build_app(config)
     handler = SocketModeHandler(app, config.slack_app_token)
+    _install_socket_error_watchdog(handler.client, config)
     logger.info("Slack 봇 시작 (Socket Mode)")
     handler.start()

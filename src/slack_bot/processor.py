@@ -38,9 +38,10 @@ REDUCE_PROMPT = PROMPTS_DIR / "reduce_summary.txt"
 REPORT_SUFFIX = ".md"
 # Slack 다운로드 전용 타임아웃(초). 회의 녹음은 수십~수백 MB 일 수 있어 넉넉히 둔다.
 DOWNLOAD_TIMEOUT_SEC = 120
-# 확장자가 OpenRouter STT 가 인식하는 포맷 문자열과 다른 경우의 매핑. 그 외는 점만 떼서 그대로 사용.
-# .qta: 아이패드 Voice Memos 저장 확장자 — 컨테이너는 m4a 와 동일한 mp4 계열이라 그대로 m4a 로 보낸다.
-_AUDIO_FORMAT_OVERRIDES = {".qta": "m4a"}
+# STT 로 보내기 전 항상 이 포맷으로 재인코딩한다(src.slack_bot.audio_split.split_audio 가
+# 담당). OpenRouter STT 문서는 m4a/aac 도 지원한다고 하지만 실제 프로바이더는 m4a 에
+# 422 를 반환한다(2026-07-09 재현 확인) — wav 는 문서와 실측이 일치해 이것만 쓴다.
+STT_AUDIO_FORMAT = "wav"
 
 
 @dataclass(frozen=True)
@@ -85,12 +86,11 @@ def process_meeting_audio(
     audio_bytes = _download_slack_file(audio_file.url_private, config.slack_bot_token, http_client)
     logger.info("Slack 파일 다운로드 완료: %s (%d bytes)", audio_file.name, len(audio_bytes))
 
-    audio_format = _AUDIO_FORMAT_OVERRIDES.get(audio_file.extension, audio_file.extension.lstrip("."))
     duration_sec = probe_duration_sec(audio_bytes, audio_file.extension)
     audio_segments = split_audio(
         audio_bytes,
         input_extension=audio_file.extension,
-        output_extension=f".{audio_format}",
+        output_extension=f".{STT_AUDIO_FORMAT}",
         duration_sec=duration_sec,
         segment_sec=config.stt.segment_minutes * 60,
         overlap_sec=config.stt.segment_overlap_sec,
@@ -99,7 +99,7 @@ def process_meeting_audio(
     chunks = []
     for i, segment in enumerate(audio_segments):
         stt_result = transcribe_audio(
-            segment.data, audio_format=audio_format, config=config.stt, api_key=config.openrouter_api_key
+            segment.data, audio_format=STT_AUDIO_FORMAT, config=config.stt, api_key=config.openrouter_api_key
         )
         chunks.append(
             Chunk(

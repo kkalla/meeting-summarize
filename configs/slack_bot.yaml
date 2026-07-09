@@ -47,3 +47,12 @@ stt:
   segment_minutes: 15
   # 구간 간 겹침(초). 경계에서 말이 잘리는 문제 완화.
   segment_overlap_sec: 30
+
+socket_mode:
+  # 맥이 절전(디스플레이 꺼짐)에 들어가면 Socket Mode 웹소켓이 좀비 상태가 되어, 재연결을
+  # 시도할 때마다 즉시 BrokenPipeError 가 나는 무한루프에 빠질 수 있다(2026-07-09 실제
+  # 발생, 몇 시간 방치됨 — 프로세스는 살아있어 launchd KeepAlive 가 개입하지 않음).
+  # 짧은 시간에 에러가 몰리면 프로세스가 스스로 종료해 launchd 가 새 프로세스로
+  # 재시작하게 한다(plist 의 ThrottleInterval=10초).
+  error_storm_window_sec: 60
+  error_storm_threshold: 5

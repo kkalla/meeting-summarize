@@ -14,7 +14,12 @@ import pytest
 
 from src.exceptions import SlackBotError, TranscriptionError
 from src.slack_bot.audio_split import AudioSegment
-from src.slack_bot.config import OpenRouterSttConfig, SlackBotConfig, SlackConfig
+from src.slack_bot.config import (
+    OpenRouterSttConfig,
+    SlackBotConfig,
+    SlackConfig,
+    SocketModeConfig,
+)
 from src.slack_bot.openrouter_stt import SttResult
 from src.slack_bot.processor import SlackAudioFile, process_meeting_audio
 from src.summarize import SummaryResult
@@ -37,6 +42,7 @@ def _slack_bot_config(tmp_path: Path) -> SlackBotConfig:
             segment_minutes=15,
             segment_overlap_sec=30,
         ),
+        socket_mode=SocketModeConfig(error_storm_window_sec=60.0, error_storm_threshold=5),
         slack_bot_token="xoxb-test",
         slack_app_token="xapp-test",
         openrouter_api_key="or-test",
@@ -92,13 +98,24 @@ def test_process_meeting_audio_writes_report_and_returns_path(tmp_path, monkeypa
     assert "회의.m4a" in content
 
 
-def test_process_meeting_audio_maps_qta_extension_to_m4a_format(tmp_path, monkeypatch):
-    _patch_single_segment(monkeypatch)
+def test_process_meeting_audio_always_uses_wav_format_for_stt(tmp_path, monkeypatch):
+    """원본 확장자가 무엇이든(.qta 포함) STT 에는 항상 wav 로 재인코딩해 보낸다.
+
+    OpenRouter STT 문서는 m4a 도 지원한다고 하지만 실제 프로바이더는 m4a 입력에 422 를
+    반환한다(2026-07-09 재현 확인) — wav 만 문서와 실측이 일치해 포맷을 고정한다.
+    """
+    captured = {}
+
+    def fake_split_audio(audio_bytes, **kw):
+        captured["output_extension"] = kw["output_extension"]
+        return [AudioSegment(data=audio_bytes, start_sec=0.0)]
+
+    monkeypatch.setattr("src.slack_bot.processor.probe_duration_sec", lambda audio_bytes, ext: 125.0)
+    monkeypatch.setattr("src.slack_bot.processor.split_audio", fake_split_audio)
     monkeypatch.setattr("src.slack_bot.processor.load_config", lambda path: _fake_pipeline_config())
-    captured_format = {}
 
     def fake_transcribe(audio_bytes, **kw):
-        captured_format["value"] = kw["audio_format"]
+        captured["audio_format"] = kw["audio_format"]
         return SttResult(text="회의 내용 전사본", duration_sec=125.0)
 
     monkeypatch.setattr("src.slack_bot.processor.transcribe_audio", fake_transcribe)
@@ -115,7 +132,8 @@ def test_process_meeting_audio_maps_qta_extension_to_m4a_format(tmp_path, monkey
 
     process_meeting_audio(audio_file, config=config, http_client=http_client)
 
-    assert captured_format["value"] == "m4a"
+    assert captured["audio_format"] == "wav"
+    assert captured["output_extension"] == ".wav"
 
 
 def test_process_meeting_audio_transcribes_each_split_segment_and_builds_multi_chunk_summary(tmp_path, monkeypatch):

@@ -88,17 +88,17 @@ def split_audio(
     overlap_sec: int,
     timeout_sec: int = 120,
 ) -> list[AudioSegment]:
-    """오디오를 겹치는 시간창으로 분할한다.
+    """오디오를 겹치는 시간창으로 분할하며, 항상 PCM WAV 로 재인코딩한다.
 
-    ``duration_sec`` 이 ``segment_sec`` 이하면 분할하지 않고 원본을 그대로 담아 반환한다
-    (짧은 회의는 지금까지처럼 단일 구간 그대로 처리).
+    ``duration_sec`` 이 ``segment_sec`` 이하여도 원본을 그대로 반환하지 않고 ffmpeg 를
+    한 번 거친다 — STT 로 보내기 전 포맷을 wav 로 정규화해야 하기 때문이다(원본이 m4a 등
+    OpenRouter STT 가 422 를 내는 포맷일 수 있다. ``_run_ffmpeg_segment`` 문서 참고).
+    이 경우도 구간은 정확히 1개만 생성된다(전체 길이를 한 창으로 잡음).
 
     Args:
         audio_bytes: 원본 오디오 바이트.
         input_extension: 원본 확장자(점 포함) — ffmpeg 입력 컨테이너 판별용.
-        output_extension: 구간 파일에 쓸 확장자(점 포함, 예: ``.m4a``). OpenRouter STT 가
-            인식하는 컨테이너와 맞춰야 한다(``.qta`` 처럼 ffmpeg 가 모르는 확장자는 여기 못 씀
-            — 호출부에서 표준 확장자로 매핑해서 넘겨야 한다).
+        output_extension: 구간 파일에 쓸 확장자(점 포함, 보통 ``.wav``).
         duration_sec: 원본 오디오 전체 길이(:func:`probe_duration_sec` 결과 재사용, 중복 프로빙 방지).
         segment_sec: 구간 길이(초, 겹침 제외).
         overlap_sec: 구간 간 겹침(초). 경계에서 말이 잘리는 문제 완화.
@@ -107,9 +107,6 @@ def split_audio(
     Raises:
         DependencyError: ffmpeg 미설치 또는 구간 분할 실패.
     """
-    if duration_sec <= segment_sec:
-        return [AudioSegment(data=audio_bytes, start_sec=0.0)]
-
     if shutil.which(FFMPEG_BIN) is None:
         raise DependencyError(
             f"{FFMPEG_BIN} 가 설치되어 있지 않습니다. './setup.sh' 또는 'brew install ffmpeg' 를 실행하세요."
@@ -143,8 +140,13 @@ def _run_ffmpeg_segment(input_path: Path, output_path: Path, *, start: float, wi
     ``-c copy`` (스트림 그대로 복사) 대신 재인코딩한다: 아이패드 Voice Memos 의 ``qt``
     컨테이너는 특이한 edit list 를 갖고 있어 스트림 복사로 그 잔재가 그대로 남으면
     STT 백엔드가 못 씹을 위험이 있고(46분 파일에서 관찰된 502 원인 후보), 음성 인식엔
-    원본 스테레오/48kHz 품질도 필요 없다 — 16kHz mono 64kbps 로 낮춰 페이로드도 크게 줄인다
+    원본 스테레오/48kHz 품질도 필요 없다 — 16kHz mono 로 낮춰 페이로드도 줄인다
     (legacy/audio.py 가 whisper.cpp 용으로 16kHz mono 를 쓰는 것과 같은 이유).
+
+    출력 포맷은 항상 PCM WAV 다(``pcm_s16le``, 무손실). OpenRouter STT 문서는 m4a/aac 도
+    지원한다고 명시하지만, 실제 프로바이더(microsoft/mai-transcribe-1.5, Azure AI Speech)는
+    m4a 입력에 항상 422 ``Provider returned 422`` 를 반환한다(2026-07-09 재현 확인 —
+    무음 톤/실제 한국어 TTS 음성 모두 m4a 는 422, wav 는 200). wav 는 문서와 실측이 일치한다.
     """
     cmd = [
         FFMPEG_BIN,
@@ -162,9 +164,7 @@ def _run_ffmpeg_segment(input_path: Path, output_path: Path, *, start: float, wi
         "-ac",
         "1",
         "-c:a",
-        "aac",
-        "-b:a",
-        "64k",
+        "pcm_s16le",
         str(output_path),
     ]
     try:

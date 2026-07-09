@@ -58,22 +58,35 @@ def test_probe_duration_sec_raises_on_unparsable_output(monkeypatch):
 # --- split_audio --------------------------------------------------------------
 
 
-def test_split_audio_returns_original_bytes_unsplit_when_short():
+def test_split_audio_reencodes_single_segment_when_short(monkeypatch):
+    """짧은 오디오도 원본 바이트를 그대로 반환하지 않고 ffmpeg 로 재인코딩한다 —
+    STT 로 보내기 전 포맷을 정규화(wav)해야 하므로(원본이 m4a 등이면 422 위험)."""
+    monkeypatch.setattr("src.slack_bot.audio_split.shutil.which", lambda _name: "/usr/bin/ffmpeg")
+
+    def fake_run(cmd, **kw):
+        output_path = cmd[-1]
+        with open(output_path, "wb") as fp:
+            fp.write(b"reencoded-bytes")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("src.slack_bot.audio_split.subprocess.run", fake_run)
+
     segments = split_audio(
         b"fake-audio",
         input_extension=".m4a",
-        output_extension=".m4a",
+        output_extension=".wav",
         duration_sec=300.0,
         segment_sec=900,
         overlap_sec=30,
     )
 
     assert len(segments) == 1
-    assert segments[0].data == b"fake-audio"
+    assert segments[0].data == b"reencoded-bytes"
     assert segments[0].start_sec == 0.0
 
 
-def test_split_audio_raises_when_ffmpeg_missing_for_long_audio(monkeypatch):
+def test_split_audio_raises_when_ffmpeg_missing(monkeypatch):
+    """짧은 오디오도 이제 ffmpeg 를 거치므로, 길이와 무관하게 ffmpeg 미설치 시 실패한다."""
     monkeypatch.setattr("src.slack_bot.audio_split.shutil.which", lambda _name: None)
 
     with pytest.raises(DependencyError):
@@ -81,7 +94,7 @@ def test_split_audio_raises_when_ffmpeg_missing_for_long_audio(monkeypatch):
             b"fake-audio",
             input_extension=".m4a",
             output_extension=".m4a",
-            duration_sec=2700.0,
+            duration_sec=300.0,
             segment_sec=900,
             overlap_sec=30,
         )
